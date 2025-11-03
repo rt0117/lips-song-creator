@@ -1,0 +1,14 @@
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\bin\Debug\net9.0\LipsSongExtractor.exe
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\bin\Debug\net9.0\LipsSongExtractor.deps.json
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\bin\Debug\net9.0\LipsSongExtractor.runtimeconfig.json
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\bin\Debug\net9.0\LipsSongExtractor.dll
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\bin\Debug\net9.0\LipsSongExtractor.pdb
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.GeneratedMSBuildEditorConfig.editorconfig
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.AssemblyInfoInputs.cache
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.AssemblyInfo.cs
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.csproj.CoreCompileInputs.cache
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.dll
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\refint\LipsSongExtractor.dll
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.pdb
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\LipsSongExtractor.genruntimeconfig.cache
+C:\Projekte\ultrastar-to-lips-converter\LipsSongExtractor\obj\Debug\net9.0\ref\LipsSongExtractor.dll
