@@ -1,0 +1,386 @@
+﻿@page "/"
+@using LipsSongCreator.Web.Services
+@inject SongService Song
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@if (!Song.IsLoaded)
+{
+    <!-- ── Upload Screen ──────────────────────────────────────── -->
+    <div class="toolbar">
+        <span class="toolbar-brand">Lips Song Creator</span>
+    </div>
+
+    <div class="upload-screen">
+        <div class="drop-zone">
+            <div class="dz-icon">&#127925;</div>
+            <div class="dz-title">Song-Datei hierher ziehen</div>
+            <div class="dz-sub">.X360 (Lips) oder .txt (UltraStar) Datei auswaehlen</div>
+            <InputFile OnChange="OnFileSelected" accept=".X360,.x360,.txt,.TXT" />
+        </div>
+
+        @if (_loading)
+        {
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div class="spinner"></div>
+                <span style="color:var(--text-secondary)">Lade Song...</span>
+            </div>
+        }
+        @if (_error != null)
+        {
+            <div style="color:var(--accent-secondary);max-width:480px;text-align:center;">@_error</div>
+        }
+    </div>
+}
+else
+{
+    <!-- ── Toolbar ─────────────────────────────────────────────── -->
+    <div class="toolbar">
+        <span class="toolbar-brand">Lips Song Creator</span>
+        <div class="toolbar-sep"></div>
+
+        <button class="btn-t" @onclick="CloseSong">Datei schliessen</button>
+        @if (Song.IsUltraStarMode)
+        {
+            <button class="btn-accent" @onclick="ExportStfs">Export DLC</button>
+            <button class="btn-t" @onclick="ExportSong">Export ZIP</button>
+        }
+        else
+        {
+            <button class="btn-accent" @onclick="ExportSong">Export .X360</button>
+        }
+
+        <div class="toolbar-sep"></div>
+
+        <button class="btn-t btn-play" title="Abspielen">&#9654;</button>
+        <button class="btn-t btn-play" title="Pause">&#10074;&#10074;</button>
+        <button class="btn-t btn-play" title="Stop">&#9632;</button>
+
+        <div class="toolbar-sep"></div>
+
+        <button class="btn-t" @onclick="ZoomIn" title="Zoom +">+</button>
+        <button class="btn-t" @onclick="ZoomOut" title="Zoom -">&minus;</button>
+
+        <div class="toolbar-meta">
+            @if (_meta != null)
+            {
+                <span><strong>@_meta.Artist</strong> - <strong>@_meta.Name</strong></span>
+            }
+        </div>
+    </div>
+
+    <!-- ── Editor Area ─────────────────────────────────────────── -->
+    <div class="editor-area">
+
+        <!-- Piano Strip -->
+        <div class="piano-strip">
+            <div class="piano-keys" style="top: @(-_pianoScrollY)px;">
+                @for (var n = MAX_NOTE; n >= MIN_NOTE; n--)
+                {
+                    var note = n;
+                    var name = NOTE_NAMES[note % 12];
+                    var isBlack = BLACKS.Contains(note % 12);
+                    var isC = note % 12 == 0;
+                    var oct = note / 12 - 1;
+                    <div class="p-key @(isBlack ? "b" : "w") @(isC ? "c" : "")"
+                         style="height:16px;">
+                        @if (isC || name == "E" || name == "A")
+                        {
+                            @($"{name}{oct}")
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="canvas-wrap">
+            <canvas id="pianoCanvas"></canvas>
+        </div>
+
+        <!-- Sequence Panel -->
+        <div class="seq-panel">
+            @if (_meta != null)
+            {
+                <h6>Metadaten</h6>
+                <div class="meta-form">
+                    <label>Titel</label>
+                    <input type="text" @bind="_meta.Name" />
+                    <label>Artist</label>
+                    <input type="text" @bind="_meta.Artist" />
+                    <label>Album</label>
+                    <input type="text" @bind="_meta.Album" />
+                    <label>Genre</label>
+                    <input type="text" @bind="_meta.Genre" />
+                    <label>Jahr</label>
+                    <input type="text" @bind="_meta.Year" />
+                    <label>Sprache</label>
+                    <input type="text" @bind="_meta.Language" />
+                </div>
+            }
+
+            <h6>Sequenzen</h6>
+            @foreach (var seq in _sequences)
+            {
+                var s = seq;
+                var isActive = s.Name == _activeSeq;
+                <div class="seq-item @(isActive ? "active" : "")" @onclick="() => SelectSequence(s.Name)">
+                    <span>@s.Name</span>
+                    <span class="cnt">@s.MarkerCount</span>
+                </div>
+            }
+
+            @if (_selectedNote >= 0 && _selectedNote < _activeMarkers.Count)
+            {
+                var m = _activeMarkers[_selectedNote];
+                <h6>Selektierte Note</h6>
+                <div style="font-size:0.75rem;color:var(--text-secondary);padding:0.25rem;">
+                    <div><span style="color:var(--text-muted)">Typ:</span> @ShortName(m.ClassName)</div>
+                    <div><span style="color:var(--text-muted)">Zeit:</span> <span style="color:var(--accent-primary);font-family:monospace">@m.TimingFormatted</span></div>
+                    <div><span style="color:var(--text-muted)">Laenge:</span> @m.Length.ToString("F3")s</div>
+                    @if (m.NoteName != null)
+                    {
+                        <div><span style="color:var(--text-muted)">Note:</span> <strong style="color:var(--accent-gold)">@m.NoteName</strong></div>
+                    }
+                    @if (!string.IsNullOrEmpty(m.FreeWord))
+                    {
+                        <div><span style="color:var(--text-muted)">Silbe:</span> "@m.FreeWord"</div>
+                    }
+                    @if (!string.IsNullOrEmpty(m.TagName))
+                    {
+                        <div><span style="color:var(--text-muted)">Tag:</span> @m.TagName</div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Timeline -->
+        <div class="timeline-bar"></div>
+
+        <!-- Lyrics Bar -->
+        <div class="lyrics-bar">
+            @if (_lyricMarkers.Count > 0)
+            {
+                @for (var i = 0; i < _lyricMarkers.Count; i++)
+                {
+                    var lm = _lyricMarkers[i];
+                    var word = lm.FreeWord ?? "";
+                    if (string.IsNullOrEmpty(word)) continue;
+                    var isOn = i == _activeLyricIdx;
+                    <span class="syl @(isOn ? "on" : "") @(lm.EndOfWord ? "we" : "")">@word</span>
+                }
+            }
+            else
+            {
+                <span style="color:var(--text-muted);font-size:0.8rem;">Lyrics werden hier angezeigt...</span>
+            }
+        </div>
+    </div>
+
+    <!-- Properties Bar -->
+    <div class="props-bar">
+        <span><span class="lbl">Sequenz:</span> <span class="val">@_activeSeq</span></span>
+        <span><span class="lbl">Marker:</span> <span class="val">@_activeMarkers.Count</span></span>
+        <span><span class="lbl">Zoom:</span> <span class="val">@_zoom px/s</span></span>
+        @if (_meta != null)
+        {
+            <span><span class="lbl">Offset:</span> <span class="val">@_meta.BaseCentOffset ct</span></span>
+        }
+    </div>
+}
+
+@code {
+    private const int MIN_NOTE = 36;
+    private const int MAX_NOTE = 84;
+    private static readonly string[] NOTE_NAMES = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    private static readonly HashSet<int> BLACKS = new() {1,3,6,8,10};
+
+    private bool _loading;
+    private string? _error;
+    private SongMetadata? _meta;
+    private List<SequenceInfo> _sequences = [];
+    private List<MarkerInfo> _activeMarkers = [];
+    private List<MarkerInfo> _lyricMarkers = [];
+    private string _activeSeq = "Melody";
+    private int _selectedNote = -1;
+    private int _activeLyricIdx = -1;
+    private int _zoom = 80;
+    private int _pianoScrollY = 200; // Start etwas runter gescrollt
+    private DotNetObjectReference<Home>? _dotNetRef;
+    private bool _canvasInitialized;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            var file = e.File;
+            var isUltraStar = file.Name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase);
+
+            if (isUltraStar)
+            {
+                // UltraStar TXT laden
+                using var reader = new StreamReader(file.OpenReadStream(50 * 1024 * 1024));
+                var content = await reader.ReadToEndAsync();
+                Song.LoadUltraStar(file.Name, content);
+            }
+            else
+            {
+                // Lips .X360 laden
+                using var ms = new MemoryStream();
+                await file.OpenReadStream(50 * 1024 * 1024).CopyToAsync(ms);
+                Song.Load(file.Name, ms.ToArray());
+            }
+
+            _meta = Song.GetMetadata();
+            _sequences = Song.GetSequences();
+
+            // Lade Lyrics
+            var lyricSeq = _sequences.FirstOrDefault(s => s.Name == "Lyric");
+            _lyricMarkers = lyricSeq?.Markers ?? [];
+
+            // Lade aktive Sequenz (Melody)
+            SelectSequenceData("Melody");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Fehler: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Song.IsLoaded && !_canvasInitialized)
+        {
+            _canvasInitialized = true;
+            _dotNetRef = DotNetObjectReference.Create(this);
+
+            await JS.InvokeVoidAsync("pianoRoll.init", "pianoCanvas", _dotNetRef);
+            await PushNotesToCanvas();
+        }
+    }
+
+    private async Task PushNotesToCanvas()
+    {
+        // Konvertiere Marker zu JS-kompatiblem Format
+        var jsNotes = _activeMarkers
+            .Where(m => m.ToneFIdx != null || !string.IsNullOrEmpty(m.FreeWord) || !string.IsNullOrEmpty(m.TagName))
+            .Select(m => new {
+                time = m.TriggerTiming,
+                length = Math.Max(m.Length, 0.05f),
+                fIdx = m.ToneFIdx ?? 0,
+                octave = m.ToneOctave ?? 4,
+                syllable = m.FreeWord ?? m.TagName ?? "",
+                type = "normal"
+            }).ToList();
+
+        await JS.InvokeVoidAsync("pianoRoll.setNotes", jsNotes);
+    }
+
+    [JSInvokable]
+    public void OnNoteSelected(int idx)
+    {
+        _selectedNote = idx;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void SelectSequence(string name)
+    {
+        SelectSequenceData(name);
+        _ = PushNotesToCanvas();
+    }
+
+    private void SelectSequenceData(string name)
+    {
+        _activeSeq = name;
+        _selectedNote = -1;
+        var seq = _sequences.FirstOrDefault(s => s.Name == name);
+        _activeMarkers = seq?.Markers ?? [];
+    }
+
+    private async Task ZoomIn()
+    {
+        _zoom = Math.Min(400, _zoom + 20);
+        await JS.InvokeVoidAsync("pianoRoll.setZoom", _zoom);
+    }
+
+    private async Task ZoomOut()
+    {
+        _zoom = Math.Max(20, _zoom - 20);
+        await JS.InvokeVoidAsync("pianoRoll.setZoom", _zoom);
+    }
+
+    private void CloseSong()
+    {
+        _meta = null;
+        _sequences = [];
+        _activeMarkers = [];
+        _lyricMarkers = [];
+        _canvasInitialized = false;
+        _ = JS.InvokeVoidAsync("pianoRoll.destroy");
+    }
+
+    private async Task ExportStfs()
+    {
+        try
+        {
+            if (!Song.IsLoaded || !Song.IsUltraStarMode) return;
+
+            var bytes = Song.ExportAsStfs();
+            var base64 = Convert.ToBase64String(bytes);
+            var title = _meta?.Name ?? "Song";
+            await JS.InvokeVoidAsync("fileDownload.save", $"{title}_LipsDLC", base64);
+        }
+        catch (Exception ex)
+        {
+            _error = $"STFS-Export fehlgeschlagen: {ex.Message}";
+        }
+    }
+
+    private async Task ExportSong()
+    {
+        try
+        {
+            if (!Song.IsLoaded) return;
+
+            byte[] bytes;
+            string fileName;
+
+            if (Song.IsUltraStarMode)
+            {
+                // ZIP mit allen generierten Dateien + Anleitung
+                bytes = Song.ExportAsZip();
+                var title = _meta?.Name ?? "Song";
+                fileName = $"{title}_LipsDLC.zip";
+            }
+            else
+            {
+                // Einzelne modifizierte .X360
+                bytes = Song.Export();
+                fileName = Song.FileName?.Replace(".X360", "_modified.X360") ?? "export.X360";
+            }
+
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("fileDownload.save", fileName, base64);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Export fehlgeschlagen: {ex.Message}";
+        }
+    }
+
+    private static string ShortName(string n) =>
+        n.Replace("lps", "").Replace("ixSeq", "").Replace("ix", "");
+
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+    }
+}

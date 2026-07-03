@@ -1,0 +1,64 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+
+## IDE
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+## OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+## Project specific
+*.DotSettings.user
+california_love_chart.json
+Example/DLC_extracted/
+Example/Captain_Jack_DLC_extracted/
+Example/Captain_Jack_Repack*
+
+## Large binary files (keep only small .X360 and .jpg for tests)
+*.xWMA
+*.wmv
+*.nft
+
+## DLC packages and large example files (too big for GitHub)
+Example/DLC/
+Example/Captain Jack/
+
+## Vendor libraries (restored via libman/npm)
+**/wwwroot/lib/

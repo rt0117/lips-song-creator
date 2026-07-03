@@ -1,0 +1,21 @@
+#TITLE:Test Song
+#ARTIST:Test Artist
+#MP3:test.mp3
+#BPM:400
+#GAP:5000
+#COVER:cover.jpg
+#GENRE:Pop
+#YEAR:2024
+#LANGUAGE:English
+: 0 5 0 Cal
+: 5 3 2 i
+: 8 4 4 for
+* 12 6 7 nia
+- 20
+: 20 4 5 knows
+: 24 3 2 how
+: 27 5 0 to
+F 32 8 0 par
+: 40 4 2 ty
+- 48
+E
