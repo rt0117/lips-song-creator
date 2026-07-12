@@ -69,8 +69,15 @@ switch (command)
         break;
 
     case "create-test-dlc":
-        if (args.Length < 3) { Console.WriteLine("Fehlt: <Song-Ordner> <Ausgabe-Pfad>"); return; }
-        CmdCreateTestDlc(args[1], args[2]);
+        if (args.Length < 4)
+        {
+            Console.WriteLine("Fehlt: <Template-DLC> <Song-Ordner> <Ausgabe-Pfad>");
+            Console.WriteLine("  Template-DLC: Ein Original-STFS-Paket dessen Header als Vorlage dient");
+            Console.WriteLine("  Song-Ordner:  Ordner mit den Song-Dateien (.X360, .xWMA, .jpg, etc.)");
+            Console.WriteLine("  Ausgabe-Pfad: Pfad fuer das erzeugte STFS-Paket");
+            return;
+        }
+        CmdCreateTestDlc(args[1], args[2], args[3]);
         break;
 
     case "convert-ultrastar":
@@ -100,7 +107,7 @@ void PrintUsage()
     Console.WriteLine("  export-json <Pfad.X360> [output.json]    Alles als JSON exportieren");
     Console.WriteLine("  stfs-list  <Paket>                       STFS/LIVE-Paket: Dateien auflisten");
     Console.WriteLine("  stfs-extract <Paket> <Ordner>            STFS/LIVE-Paket: Dateien extrahieren");
-    Console.WriteLine("  create-test-dlc <Song-Ordner> <Ausgabe>   Test-DLC aus bestehendem Song erzeugen");
+    Console.WriteLine("  create-test-dlc <Template> <Ordner> <Out>  DLC mit Original-Header-Template erzeugen");
     Console.WriteLine("  convert-ultrastar <TXT> <Ausgabe-Ordner>  UltraStar -> Lips DLC konvertieren");
     Console.WriteLine("  analyze    <Pfad.X360>                   Blob-Struktur analysieren");
     Console.WriteLine("  hexdump    <Pfad.X360> [offset] [len]    Hex-Dump ab offset (hex)");
@@ -209,12 +216,18 @@ void CmdStfsRepack(string templatePath, string songDir, string outputPath)
     Console.WriteLine("  Content/0000000000000000/4D530888/00000002/");
 }
 
-void CmdCreateTestDlc(string songDir, string outputPath)
+void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
 {
-    Console.WriteLine($"=== Test-DLC erstellen aus {songDir} ===");
+    Console.WriteLine($"=== Test-DLC erstellen ===");
+    Console.WriteLine($"Template: {templatePath}");
+    Console.WriteLine($"Song-Ordner: {songDir}");
     Console.WriteLine();
 
-    // Finde alle Song-Dateien
+    // Template laden
+    var templateBytes = File.ReadAllBytes(templatePath);
+    Console.WriteLine($"Template: {templateBytes.Length:N0} Bytes");
+
+    // Alle Song-Dateien laden
     var files = new Dictionary<string, byte[]>();
     var songName = "";
 
@@ -223,7 +236,7 @@ void CmdCreateTestDlc(string songDir, string outputPath)
         var name = Path.GetFileName(file);
         files[name] = File.ReadAllBytes(file);
 
-        if (name.EndsWith(".X360") && !name.Contains("_Lyric"))
+        if (name.EndsWith(".X360") && !name.Contains("_Lyric") && !name.StartsWith("GES"))
         {
             songName = Path.GetFileNameWithoutExtension(name);
         }
@@ -237,6 +250,8 @@ void CmdCreateTestDlc(string songDir, string outputPath)
 
     Console.WriteLine($"Song: {songName}");
     Console.WriteLine($"Dateien: {files.Count}");
+    foreach (var f in files)
+        Console.WriteLine($"  {f.Key} ({f.Value.Length:N0} Bytes)");
 
     // Chart lesen um Metadaten zu extrahieren
     var chartPath = Path.Combine(songDir, $"{songName}.X360");
@@ -263,17 +278,24 @@ void CmdCreateTestDlc(string songDir, string outputPath)
         files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(input, songName);
     }
 
-    // STFS LIVE-Paket erstellen
-    Console.WriteLine("Erstelle STFS LIVE-Paket...");
-    var stfsData = StfsWriter.CreatePackage(
+    // STFS LIVE-Paket erstellen mit Template-Header
+    Console.WriteLine("Erstelle STFS LIVE-Paket (Template-basiert)...");
+    var stfsData = StfsWriter.CreateFromTemplate(
+        templateBytes,
         files,
         $"\"{title}\"",
-        $"Custom DLC: {title}",
-        titleId: 0x4D530888,
-        contentType: 0x00000002);
+        $"Custom DLC: {title}");
 
     File.WriteAllBytes(outputPath, stfsData);
     Console.WriteLine($"DLC geschrieben: {outputPath} ({stfsData.Length:N0} Bytes)");
+    Console.WriteLine();
+
+    // Verifizieren
+    using var reader = new StfsReader(outputPath);
+    Console.WriteLine($"Verifikation: {reader.Files.Count} Dateien gelesen");
+    foreach (var f in reader.Files)
+        Console.WriteLine($"  {f.Name} ({f.Size:N0} Bytes)");
+
     Console.WriteLine();
     Console.WriteLine("=== Anleitung ===");
     Console.WriteLine("1. Datei auf USB-Stick oder Xbox-HDD kopieren nach:");
