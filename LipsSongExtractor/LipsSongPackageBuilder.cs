@@ -256,7 +256,9 @@ public static class LipsSongPackageBuilder
 
     private static string GenerateOfferId(string title, string artist)
     {
-        var hash = 0u;
+        // Kombiniere Titel+Artist mit einem Zeitstempel fuer Eindeutigkeit
+        // Damit kollidiert die ID nicht mit der Disc-Version des gleichen Songs
+        var hash = (uint)Environment.TickCount;
         foreach (var c in title + artist)
             hash = hash * 31 + c;
         return $"{(hash & 0x0FFFFFFF):X7}";

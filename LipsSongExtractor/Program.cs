@@ -262,21 +262,20 @@ void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
     var title = chart?["m_strName"]?.ToString() ?? songName;
     Console.WriteLine($"Titel: {title}");
 
-    // DLC.xml erzeugen falls nicht vorhanden
-    if (!files.ContainsKey("DLC.xml"))
+    // DLC.xml IMMER neu erzeugen mit eindeutiger ID
+    // Damit Lips den Song als eigenen DLC erkennt (nicht als Duplikat der Disc-Version)
+    Console.WriteLine("Erzeuge DLC.xml mit eindeutiger ID...");
+    var dlcInput = new LipsSongPackageBuilder.SongInput
     {
-        Console.WriteLine("Erzeuge DLC.xml...");
-        var input = new LipsSongPackageBuilder.SongInput
-        {
-            Title = title,
-            Artist = "Unknown Artist",
-            Genre = "Pop",
-            Year = "2024",
-            Language = "EN",
-            LengthSeconds = 200,
-        };
-        files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(input, songName);
-    }
+        Title = title,
+        Artist = "Unknown Artist",
+        Genre = "Pop",
+        Year = "2024",
+        Language = "EN",
+        LengthSeconds = 200,
+    };
+    // Eindeutige ID basierend auf Zeitstempel damit keine Kollision mit Disc-Version
+    files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(dlcInput, songName);
 
     // STFS LIVE-Paket erstellen mit Template-Header
     Console.WriteLine("Erstelle STFS LIVE-Paket (Template-basiert)...");
