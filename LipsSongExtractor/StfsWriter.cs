@@ -37,10 +37,11 @@ public static class StfsWriter
                                        (templatePackage[0x342] << 8) | templatePackage[0x343]);
         var firstBlock = (int)((templateHeaderSize + 0xFFF) & 0xFFFFF000);
 
-        // Dateien vorbereiten
+        // Dateien vorbereiten - DLC.xml MUSS zuerst kommen (Lips erwartet das)
+        var sortedFiles = SortFilesForStfs(files);
         var fileEntries = new List<FileEntry>();
         var totalDataBlocks = 0;
-        foreach (var (name, data) in files)
+        foreach (var (name, data) in sortedFiles)
         {
             var blocks = (data.Length + BlockSize - 1) / BlockSize;
             fileEntries.Add(new FileEntry
@@ -205,11 +206,12 @@ public static class StfsWriter
         uint titleId = 0x4D530888, // Lips
         uint contentType = 0x00000002) // Marketplace Content
     {
-        // Berechne Bloecke pro Datei
+        // Berechne Bloecke pro Datei - DLC.xml MUSS zuerst kommen
+        var sortedFiles = SortFilesForStfs(files);
         var fileEntries = new List<FileEntry>();
         var totalDataBlocks = 0;
 
-        foreach (var (name, data) in files)
+        foreach (var (name, data) in sortedFiles)
         {
             var blocks = (data.Length + BlockSize - 1) / BlockSize;
             fileEntries.Add(new FileEntry
@@ -518,6 +520,28 @@ public static class StfsWriter
         // Physical 0 = L0[0], Physical 1-170 = Data[0-169],
         // Physical 171 = L1, Physical 172 = L0[1], Physical 173 = Data[170], ...
         return HashesPerTable + 1; // 171
+    }
+
+    /// <summary>
+    /// Sortiert Dateien fuer das STFS-Paket: DLC.xml zuerst, dann JPG, dann Charts, dann Audio.
+    /// Lips erwartet DLC.xml als erstes Entry in der File-Table.
+    /// </summary>
+    private static List<KeyValuePair<string, byte[]>> SortFilesForStfs(Dictionary<string, byte[]> files)
+    {
+        return files.OrderBy(f =>
+        {
+            var name = f.Key.ToUpperInvariant();
+            if (name == "DLC.XML") return 0;
+            if (name.EndsWith(".JPG") || name.EndsWith(".JPEG")) return 1;
+            if (name.EndsWith(".X360") && !name.Contains("_LYRIC")) return 2;
+            if (name.EndsWith(".X360")) return 3; // Lyric
+            if (name.EndsWith(".XWMA") && name.Contains("_PRV")) return 4;
+            if (name.EndsWith(".XWMA")) return 5;
+            if (name.EndsWith(".NFT")) return 6;
+            if (name.EndsWith(".WMV")) return 7;
+            if (name.EndsWith(".XML")) return 8; // GES*.xml
+            return 9;
+        }).ThenBy(f => f.Key).ToList();
     }
 
     private static void WriteU32BE(byte[] buf, int offset, uint value)
