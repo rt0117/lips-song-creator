@@ -69,15 +69,14 @@ switch (command)
         break;
 
     case "create-test-dlc":
-        if (args.Length < 4)
+        if (args.Length < 3)
         {
-            Console.WriteLine("Fehlt: <Template-DLC> <Song-Ordner> <Ausgabe-Pfad>");
-            Console.WriteLine("  Template-DLC: Ein Original-STFS-Paket dessen Header als Vorlage dient");
+            Console.WriteLine("Fehlt: <Song-Ordner> <Ausgabe-Pfad>");
             Console.WriteLine("  Song-Ordner:  Ordner mit den Song-Dateien (.X360, .xWMA, .jpg, etc.)");
             Console.WriteLine("  Ausgabe-Pfad: Pfad fuer das erzeugte STFS-Paket");
             return;
         }
-        CmdCreateTestDlc(args[1], args[2], args[3]);
+        CmdCreateTestDlc(args[1], args[2]);
         break;
 
     case "convert-ultrastar":
@@ -112,7 +111,7 @@ void PrintUsage()
     Console.WriteLine("  export-json <Pfad.X360> [output.json]    Alles als JSON exportieren");
     Console.WriteLine("  stfs-list  <Paket>                       STFS/LIVE-Paket: Dateien auflisten");
     Console.WriteLine("  stfs-extract <Paket> <Ordner>            STFS/LIVE-Paket: Dateien extrahieren");
-    Console.WriteLine("  create-test-dlc <Template> <Ordner> <Out>  DLC mit Original-Header-Template erzeugen");
+    Console.WriteLine("  create-test-dlc <Song-Ordner> <Ausgabe>     STFS DLC-Paket aus Song-Ordner erzeugen");
     Console.WriteLine("  convert-ultrastar <TXT> <Ausgabe-Ordner>  UltraStar -> Lips DLC konvertieren");
     Console.WriteLine("  analyze    <Pfad.X360>                   Blob-Struktur analysieren");
     Console.WriteLine("  hexdump    <Pfad.X360> [offset] [len]    Hex-Dump ab offset (hex)");
@@ -221,16 +220,10 @@ void CmdStfsRepack(string templatePath, string songDir, string outputPath)
     Console.WriteLine("  Content/0000000000000000/4D530888/00000002/");
 }
 
-void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
+void CmdCreateTestDlc(string songDir, string outputPath)
 {
-    Console.WriteLine($"=== Test-DLC erstellen ===");
-    Console.WriteLine($"Template: {templatePath}");
-    Console.WriteLine($"Song-Ordner: {songDir}");
+    Console.WriteLine($"=== DLC erstellen aus {songDir} ===");
     Console.WriteLine();
-
-    // Template laden
-    var templateBytes = File.ReadAllBytes(templatePath);
-    Console.WriteLine($"Template: {templateBytes.Length:N0} Bytes");
 
     // Alle Song-Dateien laden
     var files = new Dictionary<string, byte[]>();
@@ -267,9 +260,8 @@ void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
     var title = chart?["m_strName"]?.ToString() ?? songName;
     Console.WriteLine($"Titel: {title}");
 
-    // DLC.xml IMMER neu erzeugen mit eindeutiger ID
-    // Damit Lips den Song als eigenen DLC erkennt (nicht als Duplikat der Disc-Version)
-    Console.WriteLine("Erzeuge DLC.xml mit eindeutiger ID...");
+    // DLC.xml erzeugen mit eindeutiger ID
+    Console.WriteLine("Erzeuge DLC.xml...");
     var dlcInput = new LipsSongPackageBuilder.SongInput
     {
         Title = title,
@@ -279,13 +271,11 @@ void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
         Language = "EN",
         LengthSeconds = 200,
     };
-    // Eindeutige ID basierend auf Zeitstempel damit keine Kollision mit Disc-Version
     files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(dlcInput, songName);
 
-    // STFS LIVE-Paket erstellen mit Template-Header
-    Console.WriteLine("Erstelle STFS LIVE-Paket (Template-basiert)...");
-    var stfsData = StfsWriter.CreateFromTemplate(
-        templateBytes,
+    // STFS LIVE-Paket erstellen
+    Console.WriteLine("Erstelle STFS LIVE-Paket...");
+    var stfsData = StfsWriter.CreatePackage(
         files,
         $"\"{title}\"",
         $"Custom DLC: {title}");
