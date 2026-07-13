@@ -11,4 +11,8 @@
     <InternalsVisibleTo Include="LipsSongExtractor.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
 </Project>

@@ -85,6 +85,11 @@ switch (command)
         CmdConvertUltraStar(args[1], args[2]);
         break;
 
+    case "dump-db":
+        if (args.Length < 2) { Console.WriteLine("Fehlt: <GameContentDB-Pfad>"); return; }
+        CmdDumpDb(args[1]);
+        break;
+
     default:
         Console.WriteLine($"Unbekannter Befehl: {command}");
         PrintUsage();
@@ -301,6 +306,51 @@ void CmdCreateTestDlc(string templatePath, string songDir, string outputPath)
     Console.WriteLine("   Content/0000000000000000/4D530888/00000002/");
     Console.WriteLine("2. Dateiname kann beliebig sein (kein .bin/.live Extension noetig)");
     Console.WriteLine("3. Lips starten - Song sollte im DLC-Bereich erscheinen");
+}
+
+void CmdDumpDb(string dbPath)
+{
+    using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+    conn.Open();
+    var cmd = conn.CreateCommand();
+
+    // Tabellen
+    cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name";
+    Console.WriteLine("=== TABELLEN ===");
+    using (var reader = cmd.ExecuteReader())
+    {
+        while (reader.Read())
+        {
+            Console.WriteLine($"\n{reader.GetString(0)}:");
+            Console.WriteLine($"  {reader.GetString(1)}");
+        }
+    }
+
+    // Zeilen pro Tabelle
+    cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name";
+    var tables = new List<string>();
+    using (var reader = cmd.ExecuteReader()) { while (reader.Read()) tables.Add(reader.GetString(0)); }
+
+    foreach (var table in tables)
+    {
+        cmd.CommandText = $"SELECT COUNT(*) FROM [{table}]";
+        var count = (long)cmd.ExecuteScalar()!;
+        Console.WriteLine($"\n=== {table} ({count} Zeilen, erste 5) ===");
+
+        cmd.CommandText = $"SELECT * FROM [{table}] LIMIT 5";
+        using var reader = cmd.ExecuteReader();
+        var cols = new List<string>();
+        for (var i = 0; i < reader.FieldCount; i++) cols.Add(reader.GetName(i));
+        Console.WriteLine(string.Join(" | ", cols));
+        Console.WriteLine(new string('-', Math.Min(120, cols.Count * 20)));
+        while (reader.Read())
+        {
+            var vals = new List<string>();
+            for (var i = 0; i < reader.FieldCount; i++)
+                vals.Add(reader.IsDBNull(i) ? "NULL" : reader.GetValue(i)?.ToString() ?? "");
+            Console.WriteLine(string.Join(" | ", vals));
+        }
+    }
 }
 
 void CmdConvertUltraStar(string txtPath, string outputDir)

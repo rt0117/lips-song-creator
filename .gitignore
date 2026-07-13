@@ -59,6 +59,9 @@ Example/Captain_Jack_Repack*
 ## DLC packages and large example files (too big for GitHub)
 Example/DLC/
 Example/Captain Jack/
+Example/*.zip
+Example/*.db3
+Example/GameContentDB
 
 ## Vendor libraries (restored via libman/npm)
 **/wwwroot/lib/
