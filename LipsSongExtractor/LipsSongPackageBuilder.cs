@@ -165,10 +165,10 @@ public static class LipsSongPackageBuilder
     /// </summary>
     public static byte[] BuildDlcXml(SongInput input, string safeTitle)
     {
-        // Generiere eine eindeutige Offer-ID (7 hex chars)
+        // Generiere eine eindeutige Offer-ID (8 hex chars)
         var offerId = GenerateOfferId(input.Title, input.Artist);
         var uintId = $"0x{offerId}";
-        var contentId = $"4D530888{offerId}";
+        var contentId = $"4D530888{offerId}"; // Muss genau 16 Zeichen sein (TitleID 8 + OfferID 8)
 
         var sb = new StringBuilder();
         sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
@@ -256,12 +256,12 @@ public static class LipsSongPackageBuilder
 
     private static string GenerateOfferId(string title, string artist)
     {
-        // Kombiniere Titel+Artist mit einem Zeitstempel fuer Eindeutigkeit
-        // Damit kollidiert die ID nicht mit der Disc-Version des gleichen Songs
+        // 8 Hex-Zeichen (32-bit), mit fuehrender Null falls noetig
+        // Muss exakt 8 Zeichen sein, da ChartContentID = TitleID(8) + offerID(8) = 16 Zeichen
         var hash = (uint)Environment.TickCount;
         foreach (var c in title + artist)
             hash = hash * 31 + c;
-        return $"{(hash & 0x0FFFFFFF):X7}";
+        return $"{hash:X8}";
     }
 
     private static void AddClass(StringBuilder sb, string name, int baseIdx, int size,
