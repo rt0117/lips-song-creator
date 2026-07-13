@@ -280,21 +280,29 @@ void CmdCreateTestDlc(string songDir, string outputPath)
         $"\"{title}\"",
         $"Custom DLC: {title}");
 
-    File.WriteAllBytes(outputPath, stfsData);
-    Console.WriteLine($"DLC geschrieben: {outputPath} ({stfsData.Length:N0} Bytes)");
+    // Der Dateiname MUSS die ContentID + "4D" sein!
+    // Lips identifiziert DLCs anhand des Dateinamens.
+    var requiredName = StfsWriter.GetRequiredFileName(stfsData);
+    var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".";
+    var finalPath = Path.Combine(outputDir, requiredName);
+
+    File.WriteAllBytes(finalPath, stfsData);
+    Console.WriteLine($"DLC geschrieben: {finalPath}");
+    Console.WriteLine($"  Groesse: {stfsData.Length:N0} Bytes");
+    Console.WriteLine($"  Dateiname: {requiredName}");
     Console.WriteLine();
 
     // Verifizieren
-    using var reader = new StfsReader(outputPath);
+    using var reader = new StfsReader(finalPath);
     Console.WriteLine($"Verifikation: {reader.Files.Count} Dateien gelesen");
     foreach (var f in reader.Files)
         Console.WriteLine($"  {f.Name} ({f.Size:N0} Bytes)");
 
     Console.WriteLine();
     Console.WriteLine("=== Anleitung ===");
-    Console.WriteLine("1. Datei auf USB-Stick oder Xbox-HDD kopieren nach:");
+    Console.WriteLine($"1. Datei '{requiredName}' kopieren nach:");
     Console.WriteLine("   Content/0000000000000000/4D530888/00000002/");
-    Console.WriteLine("2. Dateiname kann beliebig sein (kein .bin/.live Extension noetig)");
+    Console.WriteLine("2. Der Dateiname MUSS exakt so bleiben (enthalt die ContentID)!");
     Console.WriteLine("3. Lips starten - Song sollte im DLC-Bereich erscheinen");
 }
 

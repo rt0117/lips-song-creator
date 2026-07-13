@@ -344,6 +344,14 @@ public static class StfsWriter
         WriteU32BE(blob, 0x234, 1);
         WriteU32BE(blob, 0x238, 0);
 
+        // ContentID at 0x32C (20 Bytes) - MUSS zum Dateinamen passen!
+        // Dateiname = ContentID(40 hex) + "4D"
+        // Generiere eine zufaellige ContentID
+        var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        var contentIdBytes = new byte[20];
+        rng.GetBytes(contentIdBytes);
+        Array.Copy(contentIdBytes, 0, blob, 0x32C, 20);
+
         // Header Size (0xAD0E = mit Thumbnails, wie Original)
         WriteU32BE(blob, 0x340, (uint)HeaderSize);
         WriteU32BE(blob, 0x344, contentType);
@@ -542,6 +550,18 @@ public static class StfsWriter
             if (name.EndsWith(".XML")) return 8; // GES*.xml
             return 9;
         }).ThenBy(f => f.Key).ToList();
+    }
+
+    /// <summary>
+    /// Liest die ContentID aus einem STFS-Paket und gibt den korrekten Dateinamen zurueck.
+    /// Format: ContentID(40 hex Zeichen) + "4D"
+    /// </summary>
+    public static string GetRequiredFileName(byte[] stfsPackage)
+    {
+        var contentId = new StringBuilder(40);
+        for (var i = 0; i < 20; i++)
+            contentId.AppendFormat("{0:X2}", stfsPackage[0x32C + i]);
+        return contentId.ToString() + "4D";
     }
 
     private static void WriteU32BE(byte[] buf, int offset, uint value)
