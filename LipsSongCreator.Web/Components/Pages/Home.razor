@@ -3,6 +3,7 @@
 @using LipsSongCreator.Web.Services
 @inject SongService Song
 @inject DlcBuildService DlcBuilder
+@inject MediaCacheService MediaCache
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @rendermode InteractiveServer
@@ -66,9 +67,17 @@ else
 
         <div class="toolbar-sep"></div>
 
-        <button class="btn-t btn-play" title="Abspielen">&#9654;</button>
-        <button class="btn-t btn-play" title="Pause">&#10074;&#10074;</button>
-        <button class="btn-t btn-play" title="Stop">&#9632;</button>
+        <button class="btn-t btn-play" title="Abspielen (ab Playhead)" @onclick="PlayAudio">&#9654;</button>
+        <button class="btn-t btn-play" title="Pause" @onclick="PauseAudio">&#10074;&#10074;</button>
+        <button class="btn-t btn-play" title="Stop" @onclick="StopAudio">&#9632;</button>
+        @if (!_audioLoaded && Song.IsUltraStarMode)
+        {
+            <span style="font-size:0.7rem;color:var(--text-muted);">(kein Audio geladen)</span>
+        }
+
+        <div class="toolbar-sep"></div>
+
+        <button class="btn-t @(_previewVisible ? "active" : "")" title="Preview-Bereich anzeigen/setzen" @onclick="TogglePreview">Preview</button>
 
         <div class="toolbar-sep"></div>
 
@@ -156,7 +165,17 @@ else
                     {
                         <div><span style="color:var(--text-muted)">Note:</span> <strong style="color:var(--accent-gold)">@m.NoteName</strong></div>
                     }
-                    @if (!string.IsNullOrEmpty(m.FreeWord))
+                    @if (Song.IsUltraStarMode && _activeSeq == "Melody")
+                    {
+                        <label style="color:var(--text-muted);display:block;margin-top:0.4rem;">Silbe</label>
+                        <input type="text" value="@m.FreeWord" @onchange="UpdateSelectedSyllable"
+                               style="width:100%;margin-top:0.15rem;" />
+                        <div style="color:var(--text-muted);font-size:0.62rem;margin-top:0.25rem;line-height:1.4;">
+                            Leerzeichen am Ende = Wortende.<br />
+                            Note ziehen = verschieben, Kanten = Laenge.
+                        </div>
+                    }
+                    else if (!string.IsNullOrEmpty(m.FreeWord))
                     {
                         <div><span style="color:var(--text-muted)">Silbe:</span> "@m.FreeWord"</div>
                     }
@@ -211,6 +230,8 @@ else
 
     private bool _loading;
     private string? _error;
+    private bool _audioLoaded;
+    private bool _previewVisible;
     private SongMetadata? _meta;
     private List<SequenceInfo> _sequences = [];
     private List<MarkerInfo> _activeMarkers = [];
@@ -278,7 +299,113 @@ else
 
             await JS.InvokeVoidAsync("pianoRoll.init", "pianoCanvas", _dotNetRef);
             await PushNotesToCanvas();
+            await LoadAudioFromStagedProject();
+            await SyncPreviewToCanvas();
         }
+    }
+
+    /// <summary>
+    /// Laedt die Audio-Datei aus dem Wizard-Projekt in den Media-Cache
+    /// und verbindet sie mit dem Piano-Roll-Player (Vorschau/Abtiming).
+    /// </summary>
+    private async Task LoadAudioFromStagedProject()
+    {
+        if (DlcBuilder.PendingFiles == null) return;
+
+        var audioKey = DlcBuilder.PendingFiles.Keys.FirstOrDefault(k =>
+            Path.GetExtension(k).ToLowerInvariant()
+                is ".mp3" or ".m4a" or ".ogg" or ".flac" or ".wav" or ".mp4" or ".webm");
+        if (audioKey == null) return;
+
+        var cacheKey = MediaCache.Store(DlcBuilder.PendingFiles[audioKey], audioKey);
+        await JS.InvokeVoidAsync("pianoRoll.loadAudio", $"/media/{cacheKey}");
+        _audioLoaded = true;
+    }
+
+    private async Task SyncPreviewToCanvas()
+    {
+        var start = Song.GetPreviewStart();
+        if (start > 0)
+        {
+            _previewVisible = true;
+            await JS.InvokeVoidAsync("pianoRoll.setPreview", start, 15);
+        }
+    }
+
+    // ── Audio-Steuerung ──────────────────────────────────────
+
+    private async Task PlayAudio()
+    {
+        var ok = await JS.InvokeAsync<bool>("pianoRoll.playAudio", (object?)null);
+        if (!ok) _error = "Kein Audio geladen. Audio kommt aus dem Wizard-Projekt (Schritt 2).";
+    }
+
+    private async Task PauseAudio() => await JS.InvokeVoidAsync("pianoRoll.pauseAudio");
+    private async Task StopAudio() => await JS.InvokeVoidAsync("pianoRoll.stopAudio");
+
+    // ── Preview-Bereich ──────────────────────────────────────
+
+    private async Task TogglePreview()
+    {
+        _previewVisible = !_previewVisible;
+        if (_previewVisible)
+        {
+            var start = Song.GetPreviewStart();
+            if (start <= 0)
+            {
+                // Default: 30% der Songdauer (wie die Pipeline)
+                var seqDur = _activeMarkers.Count > 0
+                    ? _activeMarkers.Max(m => m.TriggerTiming + m.Length)
+                    : 60;
+                start = seqDur * 0.3;
+                Song.SetPreviewStart(start);
+            }
+            await JS.InvokeVoidAsync("pianoRoll.setPreview", start, 15);
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("pianoRoll.setPreview", -1, 15);
+        }
+    }
+
+    [JSInvokable]
+    public void OnPreviewChanged(double start, double length)
+    {
+        Song.SetPreviewStart(start);
+        InvokeAsync(StateHasChanged);
+    }
+
+    // ── Note-Editing (Callback aus dem Canvas) ───────────────
+
+    [JSInvokable]
+    public void OnNoteEdited(int idx, double time, double length, int midiPitch, string syllable)
+    {
+        // midiPitch (0-basiert ab C-1*12) -> UltraStar-Pitch (relativ zu C4=60)
+        if (_activeSeq is "Melody" && Song.IsUltraStarMode)
+        {
+            Song.UpdateNote(idx, time, length, midiPitch - 60, syllable);
+            _sequences = Song.GetSequences();
+            var lyricSeq = _sequences.FirstOrDefault(s => s.Name == "Lyric");
+            _lyricMarkers = lyricSeq?.Markers ?? [];
+            SelectSequenceData(_activeSeq);
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void UpdateSelectedSyllable(ChangeEventArgs e)
+    {
+        if (_selectedNote < 0 || _selectedNote >= _activeMarkers.Count) return;
+        if (!Song.IsUltraStarMode || _activeSeq != "Melody") return;
+
+        var m = _activeMarkers[_selectedNote];
+        Song.UpdateNote(_selectedNote, m.TriggerTiming, m.Length,
+            (int)((m.ToneOctave ?? 4) * 12 + (m.ToneFIdx ?? 0) + 12 - 60),
+            e.Value?.ToString() ?? "");
+        _sequences = Song.GetSequences();
+        var lyricSeq = _sequences.FirstOrDefault(s => s.Name == "Lyric");
+        _lyricMarkers = lyricSeq?.Markers ?? [];
+        SelectSequenceData(_activeSeq);
+        _ = PushNotesToCanvas();
     }
 
     private async Task PushNotesToCanvas()
@@ -371,6 +498,16 @@ else
 
             if (DlcBuilder.HasPendingProject)
             {
+                // Editor-Aenderungen (Noten, Silben, Preview) in die .txt
+                // zurueckschreiben, damit die Pipeline sie verwendet
+                var editedTxt = Song.SerializeUltraStar();
+                if (editedTxt != null)
+                {
+                    var txtKey = DlcBuilder.PendingFiles!.Keys.First(k =>
+                        k.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+                    DlcBuilder.PendingFiles[txtKey] = System.Text.Encoding.UTF8.GetBytes(editedTxt);
+                }
+
                 // Wizard-Projekt: Komplett-Pipeline mit Audio/Video/Cover
                 var result = await DlcBuilder.BuildPendingAsync();
                 bytes = DlcBuilder.ReadAndCleanup(result);

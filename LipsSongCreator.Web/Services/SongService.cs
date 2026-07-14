@@ -384,6 +384,77 @@ Auf die Xbox laden:
     }
 
     /// <summary>
+    /// Direkter Zugriff auf den UltraStar-Song fuer den Editor
+    /// (Noten aendern, Preview-Fenster setzen etc.).
+    /// </summary>
+    public UltraStarSong? UltraStarSong => _ultraStarSong;
+
+    /// <summary>
+    /// Aendert eine singbare Note (P1) im UltraStar-Song.
+    /// Zeiten in Sekunden werden zurueck in Beats gerechnet.
+    /// </summary>
+    public bool UpdateNote(int index, double startSeconds, double lengthSeconds,
+        int pitch, string text)
+    {
+        if (_ultraStarSong == null) return false;
+        var singable = _ultraStarSong.SingableNotes.Where(n => n.Player == 1).ToList();
+        if (index < 0 || index >= singable.Count) return false;
+
+        var note = singable[index];
+        // Sekunden -> Viertel-Beats: beat = (s - GAP/1000) * BPM*4/60
+        var beatsPerSecond = _ultraStarSong.Bpm * 4f / 60f;
+        note.StartBeat = (int)Math.Round((startSeconds - _ultraStarSong.GapMs / 1000.0) * beatsPerSecond);
+        note.Length = Math.Max(1, (int)Math.Round(lengthSeconds * beatsPerSecond));
+        note.Pitch = pitch;
+        note.Text = text;
+
+        RefreshUltraStarState();
+        return true;
+    }
+
+    /// <summary>
+    /// Setzt das Preview-Fenster (Startzeit in Sekunden).
+    /// Wird beim DLC-Export fuer Audio-, Video- und Lyric-Preview verwendet.
+    /// </summary>
+    public void SetPreviewStart(double seconds)
+    {
+        if (_ultraStarSong == null) return;
+        _ultraStarSong.PreviewStartSeconds = (float)Math.Max(0, seconds);
+    }
+
+    public double GetPreviewStart() => _ultraStarSong?.PreviewStartSeconds ?? 0;
+
+    /// <summary>
+    /// Serialisiert den (bearbeiteten) UltraStar-Song zurueck als .txt -
+    /// damit fliessen Editor-Aenderungen in die DLC-Pipeline ein.
+    /// </summary>
+    public string? SerializeUltraStar()
+    {
+        if (_ultraStarSong == null) return null;
+
+        // Metadaten aus dem UI-Formular uebernehmen
+        if (_ultraStarMeta != null)
+        {
+            _ultraStarSong.Title = _ultraStarMeta.Name;
+            _ultraStarSong.Artist = _ultraStarMeta.Artist;
+            _ultraStarSong.Genre = _ultraStarMeta.Genre;
+            _ultraStarSong.Year = _ultraStarMeta.Year;
+            _ultraStarSong.Language = _ultraStarMeta.Language;
+        }
+
+        return UltraStarWriter.Serialize(_ultraStarSong);
+    }
+
+    /// <summary>
+    /// Baut Sequenz-Listen und Metadaten nach Editor-Aenderungen neu auf.
+    /// </summary>
+    public void RefreshUltraStarState()
+    {
+        if (_ultraStarSong == null) return;
+        _ultraStarSequences = ConvertUltraStarToSequences(_ultraStarSong);
+    }
+
+    /// <summary>
     /// Aendert ein String-Feld im Song.
     /// </summary>
     public bool SetString(string className, string fieldName, string value)
