@@ -4,6 +4,39 @@
 
 Eigene Karaoke-Songs fuer das Xbox 360 Spiel **Lips** erstellen und auf einer gemoddeten Xbox (RGH/JTAG) abspielen. Idealerweise mit automatischem Import von UltraStar-Songs.
 
+## STATUS: ZIEL ERREICHT (Juli 2026)
+
+**Die komplette UltraStar-Pipeline funktioniert auf echter Hardware.**
+Sleep Token - Damocles (UltraStar .txt + YouTube-MP4) laeuft als DLC in Lips:
+Erkennung, Preview, Gameplay mit Noten/Lyrics/Audio, Score-Screen und
+sauberes Entladen - ohne Crash.
+
+```
+dotnet run --project LipsSongExtractor convert-ultrastar "song.txt" out\
+```
+erzeugt ein fertiges STFS-Paket fuer `Content/0000000000000000/4D530888/00000002/`.
+
+Voraussetzungen: ffmpeg.exe + xWMAEncode.exe im tools/-Ordner.
+
+Die wichtigsten Format-Erkenntnisse (Details in den Abschnitten unten):
+
+1. **ContentID** (STFS 0x32C) = SHA1(header[0x344..0xB000]) = Dateiname
+2. **RSA-Signatur** muss bei modifizierten Templates GENULLT werden
+   (ungueltige Signatur = abgelehnt, leere = akzeptiert auf RGH)
+3. **IXB-Blob-Format**: [classIndex:4][ptr:4][size:4][data] pro Eintrag -
+   classIndex ist der 1-basierte Index in die <Classes>-Header-Liste
+4. **Chart braucht 15+6 Sequenzen** in Original-Reihenfolge; Conductor ist
+   eine ixTempoMap mit ixSeqTempoCode (BPM), Audio braucht einen
+   ixAudioMarker (Trigger bei GAP), Section endet mit ixSeqSuspend
+5. **Melodie-Noten sind lpsPhraseMarker** (cls 40), nicht lpsMelodyMarker
+6. **Root-ixPackage muss der LETZTE Blob-Eintrag sein** (Loader-Einstieg)
+7. **Keine geteilten Inline-Pointer** (Double-Free beim Entladen);
+   auch leere Vektoren brauchen gueltige _data-Buffer (reserve 0x20)
+8. **UltraStar-Beats sind Viertel-Beats**: s = GAP/1000 + beat*60/(BPM*4)
+
+Offener Feinschliff: Lyric-Wortabstaende, Preview-Video (_prv.wmv/nft),
+PV-Pfad-Konvention, GAP-Feintuning, Web-UI-Integration der Pipeline.
+
 ## Technologie-Stack
 
 - **Sprache:** C# / .NET 9

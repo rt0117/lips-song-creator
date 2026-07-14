@@ -61,12 +61,14 @@ public static class UltraStarToLipsConverter
     private const int CLS_LYRIC_MARKER = 38;
     private const int CLS_PHRASE_MARKER = 40;     // Melodie-Noten in Original-DLCs!
     private const int CLS_PAGE_BREAK = 41;        // Section-Marker in Original-DLCs
-    private const int CLS_SHORT_END = 42;         // 1x am Song-Ende
+    private const int CLS_SHORT_END = 42;         // 1x am Song-Ende (Section)
+    private const int CLS_SEQ_SUSPEND = 44;       // ixSeqSuspend - stoppt den Song
     private const int CLS_AUDIO_EFFECT_SEQ = 46;
     private const int CLS_LED_MASTER_SEQ = 48;
 
     private const int SZ_AUDIO_MARKER = 36;       // ixAudioMarker
     private const int SZ_SHORT_END = 24;          // lpsShortEndMarker
+    private const int SZ_SEQ_SUSPEND = 20;        // ixSeqSuspend
 
     /// <summary>
     /// Konvertiert einen UltraStar-Song in die Roh-Bestandteile einer .X360-Datei.
@@ -76,17 +78,16 @@ public static class UltraStarToLipsConverter
         var builder = new IxbBlobBuilder();
 
         // ── Strings registrieren ──────────────────────────────
+        // WICHTIG: KEINE geteilten String-Pointer! Das Original hat 0 mehrfach
+        // referenzierte Inline-Eintraege - jedes Objekt besitzt seine eigene
+        // Kopie. Beim Entladen gibt jeder ixVector seinen Puffer frei;
+        // geteilte Pointer fuehren zu Double-Free -> Crash beim Song-Ende.
         var titlePtr = builder.AddString(song.Title);
         var titleLen = Encoding.UTF8.GetByteCount(song.Title + "\0");
 
-        var noiseMakerPtr = builder.AddString("Set003");
         var noiseMakerLen = Encoding.UTF8.GetByteCount("Set003\0");
-
         var effectPtr = builder.AddString("Effect01.xml");
         var effectLen = Encoding.UTF8.GetByteCount("Effect01.xml\0");
-
-        var emptyStrPtr = builder.AddString("");
-        var emptyStrLen = 1; // null terminator
 
         // ── Noten verarbeiten ─────────────────────────────────
         var singableP1 = song.SingableNotes.Where(n => n.Player == 1).ToList();
@@ -97,22 +98,33 @@ public static class UltraStarToLipsConverter
         // Marker fuer Solo (P1), Duet (P1) und Duet_P2 erzeugen.
         // Original-Charts haben eigene Marker-Objekte pro Sequenz (keine geteilten
         // Pointer), da das Spiel m_bTriggered pro Marker zur Laufzeit setzt.
-        var (melodyPtrs, lyricPtrs) = BuildMarkers(builder, song, singableP1, emptyStrPtr);
-        var (melodyDuetPtrs, lyricDuetPtrs) = BuildMarkers(builder, song, singableP1, emptyStrPtr);
-        var (melodyP2Ptrs, lyricP2Ptrs) = BuildMarkers(builder, song, singableP2, emptyStrPtr);
+        var (melodyPtrs, lyricPtrs) = BuildMarkers(builder, song, singableP1);
+        var (melodyDuetPtrs, lyricDuetPtrs) = BuildMarkers(builder, song, singableP1);
+        var (melodyP2Ptrs, lyricP2Ptrs) = BuildMarkers(builder, song, singableP2);
 
-        // Section-Marker: lpsMarker (24 Bytes) an Phrasengrenzen (wie Original)
+        // Section-Marker: lpsPageBreakMarker (cls 41, 24 Bytes) an Phrasengrenzen.
+        // Original-Analyse: Section = 103x lpsPageBreakMarker + 1x lpsShortEndMarker
+        // + 1x ixSeqSuspend (stoppt den Song am Ende!)
         var sectionPtrs = new List<uint>();
         foreach (var pb in phrasesP1)
         {
-            var w = builder.AddObject(CLS_MARKER, SZ_MARKER);
+            var w = builder.AddObject(CLS_PAGE_BREAK, SZ_PAGE_BREAK);
             w.WriteU32(4, 1);              // m_uiReferenceCount
             w.WriteF32(8, song.BeatToSeconds(pb.StartBeat));
-            w.WriteF32(12, 0.0781f);       // m_fLength (wie Original)
+            w.WriteF32(12, 0.0786f);       // m_fLength (wie Original)
             w.WriteI32(16, 0);             // m_iTrackIndex
             w.WriteU32(20, 0);             // m_bTriggered
             sectionPtrs.Add(w.Ptr);
         }
+
+        // ixSeqSuspend am Song-Ende (Original: Trigger=SongEnde+~0.6s, Track=1).
+        // KRITISCH: Ohne Suspend laeuft der Sequencer ueber das Datenende hinaus.
+        var suspend = builder.AddObject(CLS_SEQ_SUSPEND, SZ_SEQ_SUSPEND);
+        suspend.WriteU32(4, 1);
+        suspend.WriteF32(8, song.DurationSeconds + 0.6f);
+        suspend.WriteF32(12, 0.0786f);
+        suspend.WriteI32(16, 1);           // m_iTrackIndex = 1 (wie Original)
+        sectionPtrs.Add(suspend.Ptr);
 
         // Audio: ixAudioMarker triggert die PV-Wiedergabe bei GAP ("PV Start").
         // KRITISCH: Ohne diesen Marker crasht das Spiel beim PV-Start-Trigger.
@@ -176,7 +188,7 @@ public static class UltraStarToLipsConverter
             if (codes.Count > 0)
                 arrayPtr = AddPointerArrayWithCapacity(builder, codes);
             return BuildSequence(builder, namePtr, nameLen, arrayPtr, codes.Count,
-                emptyStrPtr, emptyStrLen, clsIdx, size);
+                clsIdx, size);
         }
 
         var timeSeq = Seq("Time", [timeTag1.Ptr, timeTag2.Ptr, timeTag3.Ptr]);
@@ -252,12 +264,12 @@ public static class UltraStarToLipsConverter
         chart.WriteStringVector(8, titlePtr, titleLen); // m_strName
         chart.WriteU32(28, 0x000000FF); // m_UserColor (wie Original)
         // m_aHash @ 36 (20 bytes, leer)
-        chart.WriteStringVector(56, emptyStrPtr, emptyStrLen); // strStateName
+        chart.WriteStringVector(56, builder.AddString(""), 1); // strStateName
         chart.WriteVector(72, seqArrayPtr, seqPtrs.Length, 0x20); // m_vpSequence (15)
         chart.WriteVector(88, extraSeqArrayPtr, extraSeqPtrs.Length, 0x20); // m_vpExtraSequence (6)
         chart.WriteU32(104, 0); // m_MusicStartOffset
-        chart.WriteStringVector(108, noiseMakerPtr, noiseMakerLen); // m_strNoiseMaker
-        chart.WriteStringVector(124, noiseMakerPtr, noiseMakerLen); // m_strNoiseMakerForLS2
+        chart.WriteStringVector(108, builder.AddString("Set003"), noiseMakerLen); // m_strNoiseMaker
+        chart.WriteStringVector(124, builder.AddString("Set003"), noiseMakerLen); // m_strNoiseMakerForLS2
         chart.WriteU32(140, 0); // m_BaseCentOffset
         // m_pIndex @ 144 = null, m_pMusicData @ 148 = null
         chart.WriteStringVector(152, effectPtr, effectLen); // m_strAudioEffectPresetPath
@@ -305,6 +317,11 @@ public static class UltraStarToLipsConverter
         tailNode.WriteU32(4, rootListNode.Ptr);
         tailNode.WriteU32(8, rootListNode.Ptr);
 
+        // Eigene Titel-Kopie fuer das Root-Package - MUSS VOR dem Root-Package
+        // registriert werden, denn das Root-ixPackage muss der LETZTE
+        // Blob-Eintrag sein (Loader-Einstiegspunkt)!
+        var rootTitlePtr = builder.AddString(song.Title);
+
         // Root-ixPackage (72 Bytes, MUSS letzter Eintrag sein!) - Original [5482]:
         //   +4 refCount, +8 m_pParent=0, +12 m_lstpChildren -> tailNode
         //   +16 ??? = 1, +24 m_strName (Titel), +40 UserColor, +44 m_bIsLoaded=1, +48 Flag=0x01
@@ -313,7 +330,7 @@ public static class UltraStarToLipsConverter
         rootPkg.WriteU32(8, 0);    // m_pParent = null (Root)
         rootPkg.WriteU32(12, tailNode.Ptr); // m_lstpChildren
         rootPkg.WriteU32(16, 1);   // wie Original (+16 = 1)
-        rootPkg.WriteStringVector(24, titlePtr, titleLen); // m_strName
+        rootPkg.WriteStringVector(24, rootTitlePtr, titleLen); // m_strName
         rootPkg.WriteU32(40, 1);   // m_bIsLoaded (Original: +40 = 1)
         rootPkg.WriteData(48, [0x01]); // Flag @ 48 (Original: 01 00 00 00)
 
@@ -348,13 +365,16 @@ public static class UltraStarToLipsConverter
     /// Erzeugt Melody- + Lyric-Marker fuer eine Notenliste und verlinkt sie gegenseitig.
     /// </summary>
     private static (List<uint> melodyPtrs, List<uint> lyricPtrs) BuildMarkers(
-        IxbBlobBuilder builder, UltraStarSong song, List<UltraStarNote> notes, uint emptyStrPtr)
+        IxbBlobBuilder builder, UltraStarSong song, List<UltraStarNote> notes)
     {
         var melodyPtrs = new List<uint>();
         var melodyWriters = new List<ObjectWriter>();
         foreach (var note in notes)
         {
-            var w = builder.AddObject(CLS_MELODY_MARKER, SZ_MELODY_MARKER);
+            // Original-DLCs verwenden lpsPhraseMarker (cls 40, erbt von
+            // lpsMelodyMarker, gleiches Layout) fuer Melodie-Noten - das
+            // Spiel castet vermutlich darauf.
+            var w = builder.AddObject(CLS_PHRASE_MARKER, SZ_MELODY_MARKER);
             w.WriteU32(4, 1); // m_uiReferenceCount
             w.WriteF32(8, song.BeatToSeconds(note.StartBeat)); // m_fTriggerTiming
             w.WriteF32(12, song.BeatsToSeconds(note.Length)); // m_fLength
@@ -374,12 +394,15 @@ public static class UltraStarToLipsConverter
         for (var i = 0; i < notes.Count; i++)
         {
             var note = notes[i];
-            var text = note.Text.TrimEnd();
+            // UltraStar-Tilde (~) = Tonhoehenwechsel derselben Silbe, KEIN Text.
+            // Ohne Filterung erscheinen "~~~" im Spiel als Lyrics.
+            var text = note.Text.Replace("~", "").TrimEnd();
             var isEndOfWord = note.Text.EndsWith(" ") || note.Text.EndsWith("-") ||
                               i + 1 >= notes.Count;
 
-            var textPtr = string.IsNullOrEmpty(text) ? emptyStrPtr : builder.AddString(text);
-            var textLen = Encoding.UTF8.GetByteCount((string.IsNullOrEmpty(text) ? "" : text) + "\0");
+            // Eigene String-Kopie pro Marker (kein Sharing - Double-Free!)
+            var textPtr = builder.AddString(text);
+            var textLen = Encoding.UTF8.GetByteCount(text + "\0");
 
             var w = builder.AddObject(CLS_LYRIC_MARKER, SZ_LYRIC_MARKER);
             w.WriteU32(4, 1); // m_uiReferenceCount
@@ -419,7 +442,7 @@ public static class UltraStarToLipsConverter
     }
 
     private static uint BuildSequence(IxbBlobBuilder builder, uint namePtr, int nameLen,
-        uint codeArrayPtr, int codeCount, uint emptyStrPtr, int emptyStrLen,
+        uint codeArrayPtr, int codeCount,
         int clsIdx = CLS_SEQUENCE, int size = SZ_SEQUENCE)
     {
         var seq = builder.AddObject(clsIdx, size);
@@ -428,7 +451,9 @@ public static class UltraStarToLipsConverter
         seq.WriteU32(28, 0x000000FF); // m_UserColor (wie Original)
         // strStateName @ 56: Original hat Flag @52=1 bei gefuellten Sequenzen
         if (codeCount > 0) seq.WriteU32(52, 1);
-        seq.WriteStringVector(56, emptyStrPtr, emptyStrLen); // strStateName
+        // strStateName: eigener leerer String pro Sequenz (kein Sharing!)
+        var stateNamePtr = builder.AddString("");
+        seq.WriteStringVector(56, stateNamePtr, 1); // strStateName
 
         // KRITISCH: Auch LEERE Vektoren brauchen gueltige _data-Pointer!
         // Original: alle Sequenzen haben m_vpSeqCode/m_vpListeners mit
