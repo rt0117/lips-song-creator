@@ -67,8 +67,21 @@ public static class StfsWriter
         // 1. Kompletten Header vom Template kopieren
         Array.Copy(templatePackage, 0, blob, 0, Math.Min(firstBlock, templatePackage.Length));
 
+        // 1b. RSA-Signatur ENTFERNEN (0x04..0x22B).
+        // Die Template-Signatur wird ungueltig, sobald wir ContentID/TopHash/
+        // ContentSize aendern. Eine UNGUELTIGE Signatur fuehrt zur Ablehnung
+        // des Pakets - eine LEERE (wie bei CreatePackage) wird auf RGH/JTAG
+        // akzeptiert. Verifiziert: CreatePackage-Pakete (leer) werden erkannt,
+        // Template-Pakete (alte Signatur) nicht.
+        Array.Clear(blob, 0x04, 0x22C - 0x04);
+        blob[0x04] = 0xC6; // Certificate Type wie CreatePackage
+        blob[0x05] = 0x84;
+
         // 2. Nur die variablen Felder aktualisieren
-        var contentSize = (long)totalBlocks * BlockSize;
+        // ContentSize = alle Bloecke nach dem Header INKL. Hash-Tables
+        // (verifiziert: Original = Dateigroesse - 0xB000)
+        var physicalBlocks = ComputeDataBlockNumber(totalBlocks - 1) + 1;
+        var contentSize = (long)physicalBlocks * BlockSize;
         WriteU32BE(blob, 0x34C, (uint)(contentSize >> 32));
         WriteU32BE(blob, 0x350, (uint)(contentSize & 0xFFFFFFFF));
 
@@ -362,8 +375,10 @@ public static class StfsWriter
         WriteU32BE(blob, 0x344, contentType);
         WriteU32BE(blob, 0x348, 2); // Metadata version
 
-        // Content Size
-        var contentSize = (long)totalAllocBlocks * BlockSize;
+        // Content Size = alle physischen Bloecke inkl. Hash-Tables
+        // (verifiziert gegen Original: ContentSize == Dateigroesse - HeaderBlock)
+        var physBlockCount = ComputeDataBlockNumber(totalAllocBlocks - 1) + 1;
+        var contentSize = (long)physBlockCount * BlockSize;
         WriteU32BE(blob, 0x34C, (uint)(contentSize >> 32));
         WriteU32BE(blob, 0x350, (uint)(contentSize & 0xFFFFFFFF));
 

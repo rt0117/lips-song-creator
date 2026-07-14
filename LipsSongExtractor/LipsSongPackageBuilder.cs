@@ -67,6 +67,8 @@ public static class LipsSongPackageBuilder
         if (string.IsNullOrEmpty(lyricText) && input.UltraStarSong != null)
         {
             lyricText = BuildLyricTextFromUltraStar(input.UltraStarSong);
+            // Zurueckschreiben, damit BuildDlcXml den PreviewLyric-Fallback nutzen kann
+            input.LyricText = lyricText;
         }
 
         pkg.Files[$"{safeTitle}_Lyric.X360"] = BuildLyricX360(safeTitle, lyricText);
@@ -80,6 +82,12 @@ public static class LipsSongPackageBuilder
     /// <summary>
     /// Erzeugt eine Lyric.X360 Datei (ixRawFileImage mit dem Liedtext).
     /// </summary>
+    // Klassen-Indizes im Original-Lyric-Header (Resources/LyricHeader.xml, 1-basiert)
+    private const int LYR_CLS_PACKAGE = 4;        // ixPackage (72)
+    private const int LYR_CLS_DBLCNT = 8;         // ixDblCnt<ixPackage*> (12)
+    private const int LYR_CLS_ASSET_PACKAGE = 10; // ixAssetPackage (92)
+    private const int LYR_CLS_RAW_FILE = 15;      // ixRawFileImage (84)
+
     public static byte[] BuildLyricX360(string title, string lyricText)
     {
         var lyricName = $"{title}_Lyric";
@@ -90,73 +98,99 @@ public static class LipsSongPackageBuilder
             .Concat(Encoding.UTF8.GetBytes(lyricText))
             .ToArray();
 
+        // Struktur exakt wie Original (Happy Ending_Lyric.X360, 12 Eintraege):
+        //  [0] inline  Name ("X_Lyric\0")
+        //  [1] inline  "Text\0"
+        //  [2] inline  Text-Daten (BOM + Lyrics)
+        //  [3] inline  Name nochmal (fuer Root-Package)
+        //  [4] inline  128B Asset-Array (Slot 0 -> rawFile)
+        //  [5] inline  "Text\0" (zweite Kopie)
+        //  [6] ixRawFileImage (84)
+        //  [7] ixDblCnt leer (next/prev = self)
+        //  [8] ixAssetPackage (92)
+        //  [9] ixDblCnt (value -> assetPkg, next/prev -> [10])
+        // [10] ixDblCnt (value=0, next/prev -> [9])
+        // [11] ixPackage Root (72, LETZTER Eintrag)
         var builder = new IxbBlobBuilder();
 
-        // Strings
         var namePtr = builder.AddString(lyricName);
         var nameLen = Encoding.UTF8.GetByteCount(lyricName + "\0");
         var typePtr = builder.AddString(typeName);
         var typeLen = Encoding.UTF8.GetByteCount(typeName + "\0");
         var textPtr = builder.AddInlineData(textBytes);
-        var emptyPtr = builder.AddString("");
+        var name2Ptr = builder.AddString(lyricName);
 
-        // ixRawFileImage (Size=84)
-        // Offsets aus California Love / From Yesterday Referenz:
-        //   4: m_uiReferenceCount
-        //   8: m_strName (ixVector<char>, 16B)
-        //  24: m_pAssetPackage (ptr, 4B)
-        //  28: m_UserColor (4B)
-        //  36: m_aHash (16B)
-        //  52: m_vData (ixVector<char>, 16B) = Dateiinhalt
-        //  68: m_strTypeName (ixVector<char>, 16B)
-        var rawFile = builder.AddObject(84);
-        rawFile.WriteU32(4, 1); // refCount
+        var assetArray = new byte[128];
+        var assetArrayPtr = builder.AddInlineData(assetArray);
+
+        var type2Ptr = builder.AddString(typeName);
+
+        // ixRawFileImage (84):
+        //   +4 refCount, +8 m_strName, +24 m_pAssetPackage, +28 m_UserColor(FF),
+        //   +36 m_aHash (16B), +52 m_vData, +68 m_strTypeName
+        var rawFile = builder.AddObject(LYR_CLS_RAW_FILE, 84);
+        rawFile.WriteU32(4, 1);
         rawFile.WriteStringVector(8, namePtr, nameLen);
-        // m_pAssetPackage: null (24)
-        // m_UserColor: 0 (28)
-        // m_aHash: 0 (36-51)
+        rawFile.WriteU32(28, 0x000000FF); // m_UserColor
         rawFile.WriteStringVector(52, textPtr, textBytes.Length);
         rawFile.WriteStringVector(68, typePtr, typeLen);
 
-        // ixAssetPackage (Size=92) - Container
-        var pkgNamePtr = builder.AddString(lyricName);
-        var assetPkg = builder.AddObject(92);
-        assetPkg.WriteU32(4, 1);
-        assetPkg.WriteStringVector(24, pkgNamePtr, nameLen);
+        // Asset-Array Slot 0 -> rawFile
+        assetArray[0] = (byte)(rawFile.Ptr >> 24);
+        assetArray[1] = (byte)(rawFile.Ptr >> 16);
+        assetArray[2] = (byte)(rawFile.Ptr >> 8);
+        assetArray[3] = (byte)rawFile.Ptr;
 
-        // ixPackage (Size=72) - Root-Paket
-        var rootPkg = builder.AddObject(72);
+        // Leerer Listenknoten des AssetPackage
+        var pkgListNode = builder.AddObject(LYR_CLS_DBLCNT, 12);
+        pkgListNode.WriteU32(0, 0);
+        pkgListNode.WriteU32(4, pkgListNode.Ptr);
+        pkgListNode.WriteU32(8, pkgListNode.Ptr);
+
+        // ixAssetPackage (92)
+        var assetPkg = builder.AddObject(LYR_CLS_ASSET_PACKAGE, 92);
+        assetPkg.WriteU32(4, 1);
+        // m_pParent @ 8 -> rootPkg (unten)
+        assetPkg.WriteU32(12, pkgListNode.Ptr);
+        assetPkg.WriteStringVector(24, type2Ptr, typeLen); // Original: Name = "Text"
+        assetPkg.WriteU32(40, 1); // m_bIsLoaded
+        assetPkg.WriteU32(72, assetArrayPtr); // m_vpAssets._data
+        assetPkg.WriteU32(76, 0x20);
+        assetPkg.WriteU32(80, 1);
+
+        rawFile.WriteU32(24, assetPkg.Ptr); // m_pAssetPackage -> assetPkg
+
+        // Root-Kinderliste (Sentinel-Paar)
+        var rootListNode = builder.AddObject(LYR_CLS_DBLCNT, 12);
+        var tailNode = builder.AddObject(LYR_CLS_DBLCNT, 12);
+        rootListNode.WriteU32(0, assetPkg.Ptr);
+        rootListNode.WriteU32(4, tailNode.Ptr);
+        rootListNode.WriteU32(8, tailNode.Ptr);
+        tailNode.WriteU32(0, 0);
+        tailNode.WriteU32(4, rootListNode.Ptr);
+        tailNode.WriteU32(8, rootListNode.Ptr);
+
+        // Root-ixPackage (72, letzter Eintrag)
+        var rootPkg = builder.AddObject(LYR_CLS_PACKAGE, 72);
         rootPkg.WriteU32(4, 1);
-        rootPkg.WriteStringVector(24, pkgNamePtr, nameLen);
+        rootPkg.WriteU32(8, 0);
+        rootPkg.WriteU32(12, tailNode.Ptr);
+        rootPkg.WriteU32(16, 1);
+        rootPkg.WriteStringVector(24, name2Ptr, nameLen);
+        rootPkg.WriteU32(40, 1);
+        rootPkg.WriteData(48, [0x01]);
+
+        assetPkg.WriteU32(8, rootPkg.Ptr);
 
         var blob = builder.Build();
 
-        // XML-Header fuer Lyric-Datei (minimaler Header)
-        var headerSb = new StringBuilder();
-        headerSb.Append($"<ixb IsBigEndian=\"true\" IsText=\"false\" Platform=\"WIN32\" NumOfElements=\"{builder.EntryCount}\">");
-        headerSb.Append("<Classes>");
-        AddClass(headerSb, "ixObject", 0, 4);
-        AddClass(headerSb, "ixReferencedObject", 1, 8, ("m_uiReferenceCount", 4));
-        AddClass(headerSb, "ixTreeNode<ixPackage>", 2, 24);
-        AddClass(headerSb, "ixPackage", 3, 72);
-        AddClass(headerSb, "ixList<ixPackage *,ixAllocator<ixDblCnt<ixPackage *>,1> >", 0, 12);
-        AddClass(headerSb, "ixVector<char,1,ixAllocator<char,1>,ixIterator<char> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        AddClass(headerSb, "ixVector<ixPackage *,1,ixAllocator<ixPackage *,1>,ixIterator<ixPackage *> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        AddClass(headerSb, "ixDblCnt<ixPackage *>", 0, 12);
-        AddClass(headerSb, "ixVector<ixAsset *,1,ixAllocator<ixAsset *,1>,ixIterator<ixAsset *> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        AddClass(headerSb, "ixAssetPackage", 4, 92);
-        AddClass(headerSb, "ixMxColor4Base<unsigned char,unsigned int>", 0, 4);
-        AddClass(headerSb, "ixMxCharColor4", 11, 4);
-        AddClass(headerSb, "ixAsset", 2, 52,
-            ("m_pAssetPackage", 24), ("m_strName", 8), ("m_UserColor", 28), ("m_aHash", 36));
-        AddClass(headerSb, "ixFileImage", 13, 68, ("m_vData", 52));
-        AddClass(headerSb, "ixRawFileImage", 14, 84, ("m_strTypeName", 68));
-        headerSb.Append("</Classes>");
-
-        var headerBytes = Encoding.UTF8.GetBytes(headerSb.ToString());
+        // Original-Lyric-Header als Embedded Resource
+        var asm = typeof(LipsSongPackageBuilder).Assembly;
+        using var stream = asm.GetManifestResourceStream("LipsSongExtractor.Resources.LyricHeader.xml")
+            ?? throw new InvalidOperationException("LyricHeader.xml Resource fehlt.");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var xml = reader.ReadToEnd().Replace("{NUM_ELEMENTS}", builder.EntryCount.ToString());
+        var headerBytes = Encoding.UTF8.GetBytes(xml);
         return BuildX360File(headerBytes, blob);
     }
 
@@ -235,7 +269,8 @@ public static class LipsSongPackageBuilder
                 continue;
             }
 
-            currentLine.Append(note.Text);
+            // Tilde = Tonhoehenwechsel derselben Silbe (kein Text)
+            currentLine.Append(note.Text.Replace("~", ""));
         }
 
         if (currentLine.Length > 0)

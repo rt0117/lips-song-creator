@@ -160,9 +160,14 @@ public class IxbDeserializerTests
         var (header, blob) = X360Reader.ReadFile(TestHelpers.CaliforniaLoveX360);
         var deser = new IxbDeserializer(blob, header);
 
-        var melodies = deser.Objects.Where(o => o.ClassName == "lpsMelodyMarker").ToList();
-        Assert.True(melodies.Count > 50,
-            $"Erwartet viele Melodie-Marker, gefunden: {melodies.Count}");
+        // California Love (Disc-Song) nutzt lpsHitMarker/lpsPhraseMarker
+        // (beide erben von lpsMelodyMarker). Der alte Groessen-heuristische
+        // Parser hatte diese faelschlich als lpsMelodyMarker klassifiziert -
+        // der strikte Parser liest die echten Klassen-Indizes aus dem Blob.
+        var melodyFamily = deser.Objects.Where(o =>
+            o.ClassName is "lpsMelodyMarker" or "lpsHitMarker" or "lpsPhraseMarker").ToList();
+        Assert.True(melodyFamily.Count > 50,
+            $"Erwartet viele Melodie-Marker (inkl. Hit/Phrase), gefunden: {melodyFamily.Count}");
     }
 
     [Fact]

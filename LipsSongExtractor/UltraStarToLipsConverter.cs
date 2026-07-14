@@ -27,7 +27,7 @@ namespace LipsSongExtractor;
 /// </summary>
 public static class UltraStarToLipsConverter
 {
-    // Klassen-Groessen (aus California Love Referenz)
+    // Klassen-Groessen (aus California Love / Happy Ending Referenz)
     private const int SZ_CHART = 184;
     private const int SZ_SEQUENCE = 104;
     private const int SZ_MELODY_MARKER = 40;
@@ -36,6 +36,37 @@ public static class UltraStarToLipsConverter
     private const int SZ_PHRASE_MARKER = 40;
     private const int SZ_NAME_TAG = 36;
     private const int SZ_PAGE_BREAK = 24;
+    private const int SZ_MARKER = 24;             // lpsMarker (Section)
+    private const int SZ_TEMPO_CODE = 44;         // ixSeqTempoCode
+    private const int SZ_AUDIO_EFFECT_SEQ = 120;  // ixAudioEffectSequence
+    private const int SZ_LED_MASTER_SEQ = 140;    // lpsLedMasterSequence
+    private const int SZ_PACKAGE = 72;            // ixPackage
+    private const int SZ_ASSET_PACKAGE = 92;      // ixAssetPackage
+    private const int SZ_DBLCNT = 12;             // ixDblCnt<ixPackage*>
+
+    // Klassen-Indizes: 1-basierte Position in der <Classes>-Liste des
+    // Original-Headers (Resources/ChartHeader.xml). Der Loader nutzt diesen
+    // Index am Anfang jedes Blob-Eintrags, um die Klasse zu instanziieren.
+    private const int CLS_PACKAGE = 4;
+    private const int CLS_DBLCNT = 8;
+    private const int CLS_ASSET_PACKAGE = 10;
+    private const int CLS_CHART = 22;
+    private const int CLS_SEQUENCE = 25;
+    private const int CLS_NAME_TAG = 28;
+    private const int CLS_TEMPO_MAP = 29;
+    private const int CLS_TEMPO_CODE = 31;
+    private const int CLS_AUDIO_MARKER = 34;
+    private const int CLS_MARKER = 36;
+    private const int CLS_MELODY_MARKER = 37;
+    private const int CLS_LYRIC_MARKER = 38;
+    private const int CLS_PHRASE_MARKER = 40;     // Melodie-Noten in Original-DLCs!
+    private const int CLS_PAGE_BREAK = 41;        // Section-Marker in Original-DLCs
+    private const int CLS_SHORT_END = 42;         // 1x am Song-Ende
+    private const int CLS_AUDIO_EFFECT_SEQ = 46;
+    private const int CLS_LED_MASTER_SEQ = 48;
+
+    private const int SZ_AUDIO_MARKER = 36;       // ixAudioMarker
+    private const int SZ_SHORT_END = 24;          // lpsShortEndMarker
 
     /// <summary>
     /// Konvertiert einen UltraStar-Song in die Roh-Bestandteile einer .X360-Datei.
@@ -59,14 +90,271 @@ public static class UltraStarToLipsConverter
 
         // ── Noten verarbeiten ─────────────────────────────────
         var singableP1 = song.SingableNotes.Where(n => n.Player == 1).ToList();
+        var singableP2 = song.SingableNotes.Where(n => n.Player == 2).ToList();
+        if (singableP2.Count == 0) singableP2 = singableP1; // kein Duett -> P1 doppelt
         var phrasesP1 = song.Notes.Where(n => n.Type == UltraNoteType.PhraseBreak && n.Player == 1).ToList();
 
-        // Melody-Marker erstellen
+        // Marker fuer Solo (P1), Duet (P1) und Duet_P2 erzeugen.
+        // Original-Charts haben eigene Marker-Objekte pro Sequenz (keine geteilten
+        // Pointer), da das Spiel m_bTriggered pro Marker zur Laufzeit setzt.
+        var (melodyPtrs, lyricPtrs) = BuildMarkers(builder, song, singableP1, emptyStrPtr);
+        var (melodyDuetPtrs, lyricDuetPtrs) = BuildMarkers(builder, song, singableP1, emptyStrPtr);
+        var (melodyP2Ptrs, lyricP2Ptrs) = BuildMarkers(builder, song, singableP2, emptyStrPtr);
+
+        // Section-Marker: lpsMarker (24 Bytes) an Phrasengrenzen (wie Original)
+        var sectionPtrs = new List<uint>();
+        foreach (var pb in phrasesP1)
+        {
+            var w = builder.AddObject(CLS_MARKER, SZ_MARKER);
+            w.WriteU32(4, 1);              // m_uiReferenceCount
+            w.WriteF32(8, song.BeatToSeconds(pb.StartBeat));
+            w.WriteF32(12, 0.0781f);       // m_fLength (wie Original)
+            w.WriteI32(16, 0);             // m_iTrackIndex
+            w.WriteU32(20, 0);             // m_bTriggered
+            sectionPtrs.Add(w.Ptr);
+        }
+
+        // Audio: ixAudioMarker triggert die PV-Wiedergabe bei GAP ("PV Start").
+        // KRITISCH: Ohne diesen Marker crasht das Spiel beim PV-Start-Trigger.
+        // Pfad-Format wie Original-DLCs (relativer Asset-Pfad auf {Title}_PV).
+        var pvPath = $"../../../../../Lps/Suite102/Images/lps/Levels/Intl/M/{song.Artist}/{song.Title}/{song.Title}_PV";
+        var pvPathPtr = builder.AddString(pvPath);
+        var pvPathLen = Encoding.UTF8.GetByteCount(pvPath + "\0");
+
+        var audioMarker = builder.AddObject(CLS_AUDIO_MARKER, SZ_AUDIO_MARKER);
+        audioMarker.WriteU32(4, 1);                     // m_uiReferenceCount
+        audioMarker.WriteF32(8, song.GapMs / 1000f);    // m_fTriggerTiming = PV Start
+        audioMarker.WriteF32(12, song.DurationSeconds); // m_fLength = Song-Dauer
+        audioMarker.WriteI32(16, 0);                    // m_iTrackIndex
+        audioMarker.WriteStringVector(20, pvPathPtr, pvPathLen); // m_strAudioName
+
+        // Time NameTags ("Beat8" ist ein festes Tag, kein BPM-Wert - siehe Original)
+        var beatTagPtr = builder.AddString("Beat8");
+        var beatTagLen = Encoding.UTF8.GetByteCount("Beat8\0");
+        var pvStartPtr = builder.AddString("PV Start");
+        var pvStartLen = Encoding.UTF8.GetByteCount("PV Start\0");
+        var stopPtr = builder.AddString("Stop");
+        var stopLen = Encoding.UTF8.GetByteCount("Stop\0");
+
+        var timeTag1 = builder.AddObject(CLS_NAME_TAG, SZ_NAME_TAG);
+        timeTag1.WriteU32(4, 1);
+        timeTag1.WriteF32(8, 0);
+        timeTag1.WriteF32(12, 0.078f);
+        timeTag1.WriteStringVector(20, beatTagPtr, beatTagLen);
+
+        var timeTag2 = builder.AddObject(CLS_NAME_TAG, SZ_NAME_TAG);
+        timeTag2.WriteU32(4, 1);
+        timeTag2.WriteF32(8, song.GapMs / 1000f);
+        timeTag2.WriteF32(12, 0.078f);
+        timeTag2.WriteStringVector(20, pvStartPtr, pvStartLen);
+
+        var timeTag3 = builder.AddObject(CLS_NAME_TAG, SZ_NAME_TAG);
+        timeTag3.WriteU32(4, 1);
+        timeTag3.WriteF32(8, song.DurationSeconds + 2);
+        timeTag3.WriteF32(12, 0.078f);
+        timeTag3.WriteStringVector(20, stopPtr, stopLen);
+
+        // Conductor: ixSeqTempoCode mit BPM (KRITISCH - ohne Tempo laedt der Song nicht)
+        var tempoCode = builder.AddObject(CLS_TEMPO_CODE, SZ_TEMPO_CODE);
+        tempoCode.WriteU32(4, 1);              // m_uiReferenceCount
+        tempoCode.WriteF32(8, 0);              // m_fTriggerTiming
+        tempoCode.WriteF32(12, 0.0625f);       // m_fLength (wie Original)
+        tempoCode.WriteI32(16, 1);             // m_iTrackIndex (Original: 1)
+        tempoCode.WriteF32(20, song.RealBpm);  // m_Tempo (float BPM)
+        tempoCode.WriteI32(24, 4);             // m_Numerator (4/4-Takt)
+        tempoCode.WriteI32(28, 4);             // m_Denominator
+        tempoCode.WriteI32(32, 0);             // m_CalculatedMeasure
+        tempoCode.WriteI32(36, 0);             // m_CalculatedBeat
+        tempoCode.WriteI32(40, 0);             // m_CalculatedTick
+
+        // ── Sequenzen erstellen (Original-Reihenfolge, 15 Stueck) ──
+        uint Seq(string name, List<uint> codes, int clsIdx = CLS_SEQUENCE, int size = SZ_SEQUENCE)
+        {
+            var namePtr = builder.AddString(name);
+            var nameLen = Encoding.UTF8.GetByteCount(name + "\0");
+            uint arrayPtr = 0;
+            if (codes.Count > 0)
+                arrayPtr = AddPointerArrayWithCapacity(builder, codes);
+            return BuildSequence(builder, namePtr, nameLen, arrayPtr, codes.Count,
+                emptyStrPtr, emptyStrLen, clsIdx, size);
+        }
+
+        var timeSeq = Seq("Time", [timeTag1.Ptr, timeTag2.Ptr, timeTag3.Ptr]);
+        // Conductor ist eine ixTempoMap (cls=29, Size=104 wie ixSequence)!
+        var conductorSeq = Seq("Conductor", [tempoCode.Ptr], CLS_TEMPO_MAP);
+        var audioSeq = Seq("Audio", [audioMarker.Ptr]);
+        var lyricSeq = Seq("Lyric", lyricPtrs);
+        var melodySeq = Seq("Melody", melodyPtrs);
+        var lyricDuetSeq = Seq("Lyric_Duet", lyricDuetPtrs);
+        var melodyDuetSeq = Seq("Melody_Duet", melodyDuetPtrs);
+        var lyricP2Seq = Seq("Lyric_Duet_P2", lyricP2Ptrs);
+        var melodyP2Seq = Seq("Melody_Duet_P2", melodyP2Ptrs);
+        var sectionSeq = Seq("Section", sectionPtrs);
+        var groupSeq = Seq("Group", []);
+        var carSeq = Seq("CallAndResponse", []);
+        var movieSeq = Seq("Movie", []);
+        // AudioEffect (120 Bytes: eigener Typ mit Extra-Vector @104, leer)
+        var audioFxSeq = Seq("AudioEffect", [], CLS_AUDIO_EFFECT_SEQ, SZ_AUDIO_EFFECT_SEQ);
+        // Led (140 Bytes: lpsLedMasterSequence mit Led-Vectors @104/@120, leer)
+        var ledSeq = Seq("Led", [], CLS_LED_MASTER_SEQ, SZ_LED_MASTER_SEQ);
+
+        // ── Haupt-Sequenz-Array (Reihenfolge wie Original!) ────
+        var seqPtrs = new[]
+        {
+            timeSeq, conductorSeq, audioSeq,
+            lyricSeq, melodySeq,
+            lyricDuetSeq, melodyDuetSeq,
+            lyricP2Seq, melodyP2Seq,
+            sectionSeq, groupSeq, carSeq, movieSeq,
+            audioFxSeq, ledSeq
+        };
+        var seqArrayPtr = builder.AddPointerArray(seqPtrs);
+
+        // ── Extra-Sequenzen (6 Stueck, alle leer) ──────────────
+        var extraSeqPtrs = new[]
+        {
+            Seq("TimedGesture", []),
+            Seq("TimedGesture_Duet", []),
+            Seq("TimedGesture_Duet_P2", []),
+            Seq("Noisemaker_Mic", []),
+            Seq("Noisemaker_Mic_Duet", []),
+            Seq("Noisemaker_Mic_Duet_P2", []),
+        };
+        var extraSeqArrayPtr = builder.AddPointerArray(extraSeqPtrs);
+
+        // ── Package-Baum + lpsChart (exakt wie Original-Ende) ──
+        // Original-Struktur der letzten 7 Eintraege:
+        //   [N-7] inline 128B    Asset-Array (Slot 0 = chartPtr, Rest 0)
+        //   [N-6] inline "lpsChart\0"  Name des AssetPackage
+        //   [N-5] lpsChart       m_pAssetPackage -> assetPkg
+        //   [N-4] ixDblCnt       Listenknoten (leer: next/prev auf sich selbst)
+        //   [N-3] ixAssetPackage m_vpAssets -> Asset-Array, Parent -> rootPkg
+        //   [N-2] ixDblCnt       Root-Listenknoten .next/.prev -> [N-1]
+        //   [N-1] ixDblCnt       Kind-Listenknoten, .value -> assetPkg
+        //   [N]   ixPackage      Root, m_lstpChildren -> [N-1], Name = Titel
+
+        // Asset-Array (128 Bytes = 32 Pointer-Slots, nur Slot 0 belegt)
+        var assetArray = new byte[128];
+        var assetArrayPtr = builder.AddInlineData(assetArray); // chartPtr wird unten gepatcht
+
+        var chartPkgNamePtr = builder.AddString("lpsChart");
+        var chartPkgNameLen = Encoding.UTF8.GetByteCount("lpsChart\0");
+
+        // Feld-Offsets exakt aus dem Original-Header (ChartHeader.xml):
+        //   ixAsset:  m_strName@8, m_pAssetPackage@24, m_UserColor@28, m_aHash@36
+        //   ixPrototype: strStateName@56 (aus Original-Hexdump)
+        //   ixChart:  m_vpSequence@72, m_vpExtraSequence@88, m_MusicStartOffset@104
+        //   lpsChart: m_strNoiseMaker@108, m_strNoiseMakerForLS2@124,
+        //             m_BaseCentOffset@140, m_pIndex@144, m_pMusicData@148,
+        //             m_strAudioEffectPresetPath@152, m_strLyricPathCash@168
+        var chart = builder.AddObject(CLS_CHART, SZ_CHART);
+        chart.WriteU32(4, 1); // m_uiReferenceCount
+        chart.WriteStringVector(8, titlePtr, titleLen); // m_strName
+        chart.WriteU32(28, 0x000000FF); // m_UserColor (wie Original)
+        // m_aHash @ 36 (20 bytes, leer)
+        chart.WriteStringVector(56, emptyStrPtr, emptyStrLen); // strStateName
+        chart.WriteVector(72, seqArrayPtr, seqPtrs.Length, 0x20); // m_vpSequence (15)
+        chart.WriteVector(88, extraSeqArrayPtr, extraSeqPtrs.Length, 0x20); // m_vpExtraSequence (6)
+        chart.WriteU32(104, 0); // m_MusicStartOffset
+        chart.WriteStringVector(108, noiseMakerPtr, noiseMakerLen); // m_strNoiseMaker
+        chart.WriteStringVector(124, noiseMakerPtr, noiseMakerLen); // m_strNoiseMakerForLS2
+        chart.WriteU32(140, 0); // m_BaseCentOffset
+        // m_pIndex @ 144 = null, m_pMusicData @ 148 = null
+        chart.WriteStringVector(152, effectPtr, effectLen); // m_strAudioEffectPresetPath
+        // m_strLyricPathCash @ 168 = leer (wie Original)
+
+        // Asset-Array Slot 0 -> chart (nachtraeglich patchen)
+        assetArray[0] = (byte)(chart.Ptr >> 24);
+        assetArray[1] = (byte)(chart.Ptr >> 16);
+        assetArray[2] = (byte)(chart.Ptr >> 8);
+        assetArray[3] = (byte)chart.Ptr;
+
+        // Leerer ixDblCnt-Listenknoten des AssetPackage
+        // (Original [5478]: value=0, next=self, prev=self)
+        var pkgListNode = builder.AddObject(CLS_DBLCNT, SZ_DBLCNT);
+        pkgListNode.WriteU32(0, 0);
+        pkgListNode.WriteU32(4, pkgListNode.Ptr);
+        pkgListNode.WriteU32(8, pkgListNode.Ptr);
+
+        // ixAssetPackage (92 Bytes) - Original [5479]:
+        //   +4  refCount, +8 m_pParent (-> rootPkg), +12 m_lstpChildren (-> pkgListNode)
+        //   +24 m_strName ("lpsChart"), +40 m_bIsLoaded=1
+        //   +72 m_vpAssets (_data -> assetArray, _reserve=0x20, _size=1)
+        var assetPkg = builder.AddObject(CLS_ASSET_PACKAGE, SZ_ASSET_PACKAGE);
+        assetPkg.WriteU32(4, 1);   // refCount
+        // m_pParent @ 8 wird unten auf rootPkg gesetzt
+        assetPkg.WriteU32(12, pkgListNode.Ptr); // m_lstpChildren
+        assetPkg.WriteStringVector(24, chartPkgNamePtr, chartPkgNameLen); // m_strName
+        assetPkg.WriteU32(40, 1);  // m_bIsLoaded (Original: +40 = 1)
+        assetPkg.WriteU32(72, assetArrayPtr);  // m_vpAssets._data
+        assetPkg.WriteU32(76, 0x20);           // _reserve (32 Slots)
+        assetPkg.WriteU32(80, 1);              // _size (1 Asset: lpsChart)
+
+        // chart.m_pAssetPackage @ 24 -> assetPkg (Rueckverweis wie Original)
+        chart.WriteU32(24, assetPkg.Ptr);
+
+        // Root-Listenknoten (Original [5480]): value -> assetPkg, next/prev -> tailNode
+        // Tail-Knoten   (Original [5481]): value=0, next/prev -> rootListNode
+        // (Doppelt verkettete Liste mit Sentinel)
+        var rootListNode = builder.AddObject(CLS_DBLCNT, SZ_DBLCNT);
+        var tailNode = builder.AddObject(CLS_DBLCNT, SZ_DBLCNT);
+        rootListNode.WriteU32(0, assetPkg.Ptr);
+        rootListNode.WriteU32(4, tailNode.Ptr);
+        rootListNode.WriteU32(8, tailNode.Ptr);
+        tailNode.WriteU32(0, 0);
+        tailNode.WriteU32(4, rootListNode.Ptr);
+        tailNode.WriteU32(8, rootListNode.Ptr);
+
+        // Root-ixPackage (72 Bytes, MUSS letzter Eintrag sein!) - Original [5482]:
+        //   +4 refCount, +8 m_pParent=0, +12 m_lstpChildren -> tailNode
+        //   +16 ??? = 1, +24 m_strName (Titel), +40 UserColor, +44 m_bIsLoaded=1, +48 Flag=0x01
+        var rootPkg = builder.AddObject(CLS_PACKAGE, SZ_PACKAGE);
+        rootPkg.WriteU32(4, 1);    // refCount
+        rootPkg.WriteU32(8, 0);    // m_pParent = null (Root)
+        rootPkg.WriteU32(12, tailNode.Ptr); // m_lstpChildren
+        rootPkg.WriteU32(16, 1);   // wie Original (+16 = 1)
+        rootPkg.WriteStringVector(24, titlePtr, titleLen); // m_strName
+        rootPkg.WriteU32(40, 1);   // m_bIsLoaded (Original: +40 = 1)
+        rootPkg.WriteData(48, [0x01]); // Flag @ 48 (Original: 01 00 00 00)
+
+        // assetPkg.m_pParent -> rootPkg
+        assetPkg.WriteU32(8, rootPkg.Ptr);
+
+        // ── Blob bauen ────────────────────────────────────────
+        var blob = builder.Build();
+
+        // ── XML Header: Original-Header 1:1 verwenden ─────────
+        var header = GetChartHeader(builder.EntryCount);
+
+        return (header, blob);
+    }
+
+    /// <summary>
+    /// Laedt den Original-Chart-XML-Header (Happy Ending) als Embedded Resource
+    /// und setzt NumOfElements. Damit sind alle 58 Klassen-Definitionen
+    /// byte-identisch zum Original - keine Abweichungen im Klassen-Layout.
+    /// </summary>
+    private static byte[] GetChartHeader(int numElements)
+    {
+        var asm = typeof(UltraStarToLipsConverter).Assembly;
+        using var stream = asm.GetManifestResourceStream("LipsSongExtractor.Resources.ChartHeader.xml")
+            ?? throw new InvalidOperationException("ChartHeader.xml Resource fehlt.");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var xml = reader.ReadToEnd().Replace("{NUM_ELEMENTS}", numElements.ToString());
+        return Encoding.UTF8.GetBytes(xml);
+    }
+
+    /// <summary>
+    /// Erzeugt Melody- + Lyric-Marker fuer eine Notenliste und verlinkt sie gegenseitig.
+    /// </summary>
+    private static (List<uint> melodyPtrs, List<uint> lyricPtrs) BuildMarkers(
+        IxbBlobBuilder builder, UltraStarSong song, List<UltraStarNote> notes, uint emptyStrPtr)
+    {
         var melodyPtrs = new List<uint>();
         var melodyWriters = new List<ObjectWriter>();
-        foreach (var note in singableP1)
+        foreach (var note in notes)
         {
-            var w = builder.AddObject(SZ_MELODY_MARKER);
+            var w = builder.AddObject(CLS_MELODY_MARKER, SZ_MELODY_MARKER);
             w.WriteU32(4, 1); // m_uiReferenceCount
             w.WriteF32(8, song.BeatToSeconds(note.StartBeat)); // m_fTriggerTiming
             w.WriteF32(12, song.BeatsToSeconds(note.Length)); // m_fLength
@@ -76,241 +364,97 @@ public static class UltraStarToLipsConverter
             w.WriteF32(24, note.LipsFIdx); // fIdx
             w.WriteI32(28, note.LipsOctave); // octave
             w.WriteU32(32, 0); // m_bTilt
-            w.WriteU32(36, 0); // m_pLyricMarker (null - wird spaeter verlinkt)
+            w.WriteU32(36, 0); // m_pLyricMarker (wird unten verlinkt)
 
             melodyPtrs.Add(w.Ptr);
             melodyWriters.Add(w);
         }
 
-        // Lyric-Marker erstellen
         var lyricPtrs = new List<uint>();
-        for (var i = 0; i < singableP1.Count; i++)
+        for (var i = 0; i < notes.Count; i++)
         {
-            var note = singableP1[i];
+            var note = notes[i];
             var text = note.Text.TrimEnd();
             var isEndOfWord = note.Text.EndsWith(" ") || note.Text.EndsWith("-") ||
-                              i + 1 >= singableP1.Count;
+                              i + 1 >= notes.Count;
 
             var textPtr = string.IsNullOrEmpty(text) ? emptyStrPtr : builder.AddString(text);
             var textLen = Encoding.UTF8.GetByteCount((string.IsNullOrEmpty(text) ? "" : text) + "\0");
 
-            var w = builder.AddObject(SZ_LYRIC_MARKER);
+            var w = builder.AddObject(CLS_LYRIC_MARKER, SZ_LYRIC_MARKER);
             w.WriteU32(4, 1); // m_uiReferenceCount
             w.WriteF32(8, song.BeatToSeconds(note.StartBeat)); // m_fTriggerTiming
             w.WriteF32(12, song.BeatsToSeconds(note.Length)); // m_fLength
             w.WriteI32(16, 0); // m_iTrackIndex
             w.WriteU32(20, 0); // m_bTriggered
-            w.WriteU32(24, melodyPtrs[i]); // m_pMelodyMarker -> zum zugehoerigen MelodyMarker
-            // m_vecLyricWordData at 28 (16 bytes, leer lassen)
+            w.WriteU32(24, melodyPtrs[i]); // m_pMelodyMarker
+            // m_vecLyricWordData at 28 (16 bytes, leer)
             w.WriteStringVector(44, textPtr, textLen); // m_strFreeWord
             w.WriteU32(60, isEndOfWord ? 1u : 0u); // m_bEndOfWord
 
             lyricPtrs.Add(w.Ptr);
-
-            // Melody-Marker zurueckverlinken
-            melodyWriters[i].WriteU32(36, w.Ptr); // m_pLyricMarker
+            melodyWriters[i].WriteU32(36, w.Ptr); // m_pLyricMarker zurueckverlinken
         }
 
-        // Phrase-Marker erstellen
-        var phrasePtrs = new List<uint>();
-        foreach (var pb in phrasesP1)
+        return (melodyPtrs, lyricPtrs);
+    }
+
+    /// <summary>
+    /// Pointer-Array mit auf 0x20 aufgerundeter Kapazitaet (wie Original:
+    /// _reserve ist immer die naechste Zweierpotenz >= 0x20).
+    /// </summary>
+    private static uint AddPointerArrayWithCapacity(IxbBlobBuilder builder, List<uint> pointers)
+    {
+        var capacity = 0x20;
+        while (capacity < pointers.Count) capacity *= 2;
+        var data = new byte[capacity * 4];
+        for (var i = 0; i < pointers.Count; i++)
         {
-            var w = builder.AddObject(SZ_PHRASE_MARKER);
-            w.WriteU32(4, 1);
-            w.WriteF32(8, song.BeatToSeconds(pb.StartBeat));
-            w.WriteF32(12, 0.1f);
-            phrasePtrs.Add(w.Ptr);
+            data[i * 4] = (byte)(pointers[i] >> 24);
+            data[i * 4 + 1] = (byte)(pointers[i] >> 16);
+            data[i * 4 + 2] = (byte)(pointers[i] >> 8);
+            data[i * 4 + 3] = (byte)pointers[i];
         }
-
-        // Time NameTags
-        var beatTagPtr = builder.AddString($"Beat {(int)(song.RealBpm / 8)}");
-        var beatTagLen = Encoding.UTF8.GetByteCount($"Beat {(int)(song.RealBpm / 8)}\0");
-        var pvStartPtr = builder.AddString("PV Start");
-        var pvStartLen = Encoding.UTF8.GetByteCount("PV Start\0");
-        var stopPtr = builder.AddString("Stop");
-        var stopLen = Encoding.UTF8.GetByteCount("Stop\0");
-
-        var timeTag1 = builder.AddObject(SZ_NAME_TAG);
-        timeTag1.WriteU32(4, 1);
-        timeTag1.WriteF32(8, 0);
-        timeTag1.WriteF32(12, 0.08f);
-        timeTag1.WriteStringVector(20, beatTagPtr, beatTagLen);
-
-        var timeTag2 = builder.AddObject(SZ_NAME_TAG);
-        timeTag2.WriteU32(4, 1);
-        timeTag2.WriteF32(8, song.GapMs / 1000f);
-        timeTag2.WriteF32(12, 0.08f);
-        timeTag2.WriteStringVector(20, pvStartPtr, pvStartLen);
-
-        var timeTag3 = builder.AddObject(SZ_NAME_TAG);
-        timeTag3.WriteU32(4, 1);
-        timeTag3.WriteF32(8, song.DurationSeconds + 2);
-        timeTag3.WriteF32(12, 0.08f);
-        timeTag3.WriteStringVector(20, stopPtr, stopLen);
-
-        // ── Sequenzen erstellen ───────────────────────────────
-
-        // Melody-Sequenz
-        var melodySeqName = builder.AddString("Melody");
-        var melodyCodeArrayPtr = builder.AddPointerArray(melodyPtrs.ToArray());
-        var melodySeq = BuildSequence(builder, melodySeqName,
-            Encoding.UTF8.GetByteCount("Melody\0"),
-            melodyCodeArrayPtr, melodyPtrs.Count, emptyStrPtr, emptyStrLen);
-
-        // Lyric-Sequenz
-        var lyricSeqName = builder.AddString("Lyric");
-        var lyricCodeArrayPtr = builder.AddPointerArray(lyricPtrs.ToArray());
-        var lyricSeq = BuildSequence(builder, lyricSeqName,
-            Encoding.UTF8.GetByteCount("Lyric\0"),
-            lyricCodeArrayPtr, lyricPtrs.Count, emptyStrPtr, emptyStrLen);
-
-        // Time-Sequenz
-        var timeSeqName = builder.AddString("Time");
-        var timeCodePtrs = new[] { timeTag1.Ptr, timeTag2.Ptr, timeTag3.Ptr };
-        var timeCodeArrayPtr = builder.AddPointerArray(timeCodePtrs);
-        var timeSeq = BuildSequence(builder, timeSeqName,
-            Encoding.UTF8.GetByteCount("Time\0"),
-            timeCodeArrayPtr, 3, emptyStrPtr, emptyStrLen);
-
-        // Section-Sequenz (Phrasen)
-        var sectionSeqName = builder.AddString("Section");
-        uint sectionCodeArrayPtr = 0;
-        if (phrasePtrs.Count > 0)
-            sectionCodeArrayPtr = builder.AddPointerArray(phrasePtrs.ToArray());
-        var sectionSeq = BuildSequence(builder, sectionSeqName,
-            Encoding.UTF8.GetByteCount("Section\0"),
-            sectionCodeArrayPtr, phrasePtrs.Count, emptyStrPtr, emptyStrLen);
-
-        // Leere Pflicht-Sequenzen
-        var conductorSeq = BuildEmptySequence(builder, "Conductor", emptyStrPtr, emptyStrLen);
-        var audioSeq = BuildEmptySequence(builder, "Audio", emptyStrPtr, emptyStrLen);
-        var groupSeq = BuildEmptySequence(builder, "Group", emptyStrPtr, emptyStrLen);
-        var movieSeq = BuildEmptySequence(builder, "Movie", emptyStrPtr, emptyStrLen);
-
-        // ── Haupt-Sequenz-Array ───────────────────────────────
-        var seqPtrs = new[]
-        {
-            timeSeq, conductorSeq, audioSeq,
-            lyricSeq, melodySeq,
-            sectionSeq, groupSeq, movieSeq
-        };
-        var seqArrayPtr = builder.AddPointerArray(seqPtrs);
-
-        // ── lpsChart erstellen ────────────────────────────────
-        var chart = builder.AddObject(SZ_CHART);
-        chart.WriteU32(4, 1); // m_uiReferenceCount
-        chart.WriteStringVector(8, titlePtr, titleLen); // m_strName
-        // m_pAssetPackage @ 24 = null
-        // m_UserColor @ 28 = 0
-        // m_aHash @ 36 (16 bytes, leer)
-        // strStateName @ 56 (leerer String)
-        chart.WriteStringVector(56, emptyStrPtr, emptyStrLen);
-        chart.WriteVector(76, seqArrayPtr, seqPtrs.Length); // m_vpSequence
-        // m_vpExtraSequence @ 92 (leer)
-        chart.WriteU32(108, 0); // m_MusicStartOffset
-        chart.WriteStringVector(112, noiseMakerPtr, noiseMakerLen); // m_strNoiseMaker
-        chart.WriteStringVector(128, noiseMakerPtr, noiseMakerLen); // m_strNoiseMakerForLS2
-        // m_BaseCentOffset @ 160
-        chart.WriteU32(160, 0);
-        // m_strAudioEffectPresetPath @ 168
-        chart.WriteStringVector(168, effectPtr, effectLen);
-
-        // ── Blob bauen ────────────────────────────────────────
-        var blob = builder.Build();
-
-        // ── XML Header generieren ─────────────────────────────
-        var header = GenerateXmlHeader(blob.Length, builder.EntryCount);
-
-        return (header, blob);
+        return builder.AddInlineData(data);
     }
 
     private static uint BuildSequence(IxbBlobBuilder builder, uint namePtr, int nameLen,
-        uint codeArrayPtr, int codeCount, uint emptyStrPtr, int emptyStrLen)
+        uint codeArrayPtr, int codeCount, uint emptyStrPtr, int emptyStrLen,
+        int clsIdx = CLS_SEQUENCE, int size = SZ_SEQUENCE)
     {
-        var seq = builder.AddObject(SZ_SEQUENCE);
+        var seq = builder.AddObject(clsIdx, size);
         seq.WriteU32(4, 1); // m_uiReferenceCount
         seq.WriteStringVector(8, namePtr, nameLen); // m_strName
+        seq.WriteU32(28, 0x000000FF); // m_UserColor (wie Original)
+        // strStateName @ 56: Original hat Flag @52=1 bei gefuellten Sequenzen
+        if (codeCount > 0) seq.WriteU32(52, 1);
         seq.WriteStringVector(56, emptyStrPtr, emptyStrLen); // strStateName
-        if (codeArrayPtr != 0)
-            seq.WriteVector(72, codeArrayPtr, codeCount); // m_vpSeqCode
-        // m_vpListeners @ 88 (leer)
+
+        // KRITISCH: Auch LEERE Vektoren brauchen gueltige _data-Pointer!
+        // Original: alle Sequenzen haben m_vpSeqCode/m_vpListeners mit
+        // _reserve=0x20 und echtem Buffer - Null-Pointer crashen das Spiel.
+        if (codeArrayPtr == 0)
+            codeArrayPtr = builder.AddInlineData(new byte[0x20 * 4]);
+        var codeCapacity = 0x20;
+        while (codeCapacity < codeCount) codeCapacity *= 2;
+        seq.WriteVector(72, codeArrayPtr, codeCount, codeCapacity); // m_vpSeqCode
+
+        var listenersPtr = builder.AddInlineData(new byte[0x20 * 4]);
+        seq.WriteVector(88, listenersPtr, 0, 0x20); // m_vpListeners (leer)
+
+        // Extra-Vectors der Spezial-Sequenzen ebenfalls mit gueltigen Buffern
+        if (size >= SZ_AUDIO_EFFECT_SEQ)
+        {
+            var extraPtr = builder.AddInlineData(new byte[0x20 * 4]);
+            seq.WriteVector(104, extraPtr, 0, 0x20); // m_vecPresetEntrySequences / m_vecpLedSequence
+        }
+        if (size >= SZ_LED_MASTER_SEQ)
+        {
+            var extra2Ptr = builder.AddInlineData(new byte[0x20 * 4]);
+            seq.WriteVector(120, extra2Ptr, 0, 0x20); // m_vecpExtraLedSequence
+        }
+
         return seq.Ptr;
     }
 
-    private static uint BuildEmptySequence(IxbBlobBuilder builder, string name,
-        uint emptyStrPtr, int emptyStrLen)
-    {
-        var namePtr = builder.AddString(name);
-        var nameLen = Encoding.UTF8.GetByteCount(name + "\0");
-        return BuildSequence(builder, namePtr, nameLen, 0, 0, emptyStrPtr, emptyStrLen);
-    }
-
-    private static byte[] GenerateXmlHeader(int blobSize, int numElements)
-    {
-        var sb = new StringBuilder();
-        sb.Append($"<ixb IsBigEndian=\"true\" IsText=\"false\" Platform=\"WIN32\" NumOfElements=\"{numElements}\">");
-        sb.Append("<Classes>");
-
-        // Minimale Klassen-Definitionen (basierend auf California Love Referenz)
-        AddClass(sb, "ixObject", 0, 4);
-        AddClass(sb, "ixReferencedObject", 1, 8, ("m_uiReferenceCount", 4));
-        AddClass(sb, "ixTreeNode<ixPackage>", 2, 24);
-        AddClass(sb, "ixPackage", 3, 72);
-        // Vector-Typen (keine Members, nur Size)
-        AddClass(sb, "ixVector<char,1,ixAllocator<char,1>,ixIterator<char> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        AddClass(sb, "ixVector<ixSequence *,1,ixAllocator<ixSequence *,1>,ixIterator<ixSequence *> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        AddClass(sb, "ixVector<ixSeqCode *,1,ixAllocator<ixSeqCode *,1>,ixIterator<ixSeqCode *> >", 0, 16,
-            ("_data", 0), ("_reserve", 4), ("_size", 8), ("_allocator", 12));
-        // Asset-Klassen
-        AddClass(sb, "ixAsset", 2, 52,
-            ("m_strName", 8), ("m_pAssetPackage", 24), ("m_UserColor", 28), ("m_aHash", 36));
-        AddClass(sb, "ixPrototype", 8, 56);
-        AddClass(sb, "ixAgentPrototype", 9, 72);
-        AddClass(sb, "ixChart", 10, 108,
-            ("m_vpSequence", 76), ("m_vpExtraSequence", 92), ("m_MusicStartOffset", 108));
-        AddClass(sb, "lpsChart", 11, 184,
-            ("m_strNoiseMaker", 112), ("m_strNoiseMakerForLS2", 128),
-            ("m_BaseCentOffset", 160), ("m_pIndex", 144), ("m_pMusicData", 148),
-            ("m_strAudioEffectPresetPath", 168), ("m_strLyricPathCash", 152));
-        // Sequenz-Klassen
-        AddClass(sb, "ixSequence", 10, 104,
-            ("m_vpSeqCode", 72), ("m_vpListeners", 88));
-        AddClass(sb, "ixSeqCode", 2, 20,
-            ("m_fTriggerTiming", 8), ("m_fLength", 12), ("m_iTrackIndex", 16));
-        AddClass(sb, "ixSeqUtilCode", 14, 20);
-        AddClass(sb, "ixSeqNameTag", 15, 36, ("m_strTagName", 20));
-        AddClass(sb, "ixSeqContentSpecific", 14, 20);
-        AddClass(sb, "ixSeqMarkerCode", 17, 20);
-        AddClass(sb, "lpsMarker", 18, 24, ("m_bTriggered", 20));
-        AddClass(sb, "lpsMelodyMarker", 19, 40,
-            ("m_Tone", 24), ("m_bTilt", 32), ("m_pLyricMarker", 36));
-        AddClass(sb, "lpsLyricMarker", 19, 64,
-            ("m_pMelodyMarker", 24), ("m_vecLyricWordData", 28),
-            ("m_strFreeWord", 44), ("m_bEndOfWord", 60));
-        AddClass(sb, "Tone", 0, 8, ("fIdx", 0), ("octave", 4));
-        AddClass(sb, "lpsPhraseMarker", 20, 40);
-        AddClass(sb, "lpsHitMarker", 20, 48, ("m_Vowel", 44));
-        AddClass(sb, "lpsPageBreakMarker", 19, 24);
-
-        sb.Append("</Classes>");
-        // <Objects> tag wird vom Writer hinzugefuegt
-        return Encoding.UTF8.GetBytes(sb.ToString());
-    }
-
-    private static void AddClass(StringBuilder sb, string name, int baseIdx, int size,
-        params (string name, int offset)[] members)
-    {
-        sb.Append($"<Class Name=\"{EscapeXml(name)}\"");
-        if (baseIdx > 0) sb.Append($" Base=\"{baseIdx}\"");
-        sb.Append($" Size=\"{size}\">");
-        sb.Append("<Members>");
-        foreach (var (mName, mOffset) in members)
-            sb.Append($"<Member Name=\"{mName}\" Offset=\"{mOffset}\"/>");
-        sb.Append("</Members></Class>");
-    }
-
-    private static string EscapeXml(string s) =>
-        s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 }

@@ -34,12 +34,80 @@ public class IxbDeserializer
         _header = header;
         _classLookup = header.Classes.ClassList.ToDictionary(c => c.Name);
 
-        BuildPointerLookup();
-        FindObjects();
+        // Strikter Parser zuerst (echtes IXB-Format mit Klassen-Index),
+        // Heuristik nur als Fallback fuer beschaedigte Dateien.
+        if (!TryStrictParse())
+        {
+            BuildPointerLookup();
+            FindObjects();
+        }
     }
 
     /// <summary>
-    /// Phase 1: Scanne den Blob nach [ptr:4][size:4][data:size] Einträgen
+    /// Strikter sequentieller Parser fuer das verifizierte IXB-Format:
+    ///   Jeder Eintrag: [classIndex:4][runtime_ptr:4][size:4][data:size]
+    ///   classIndex = 0: Inline-Daten (Strings/Arrays)
+    ///   classIndex > 0: 1-basierter Index in die Classes-Liste
+    /// Verifiziert gegen Original-DLCs (Happy Ending: 5483/5483 Eintraege).
+    /// </summary>
+    private bool TryStrictParse()
+    {
+        var classes = _header.Classes.ClassList;
+        var pos = 0;
+        var entries = new List<(int ClsIdx, uint Ptr, int Size, int DataOff)>();
+
+        while (pos + 12 <= _blob.Length)
+        {
+            var clsIdx = (int)BlobAnalyzer.RU32(_blob, pos);
+            var ptr = BlobAnalyzer.RU32(_blob, pos + 4);
+            var size = BlobAnalyzer.RU32(_blob, pos + 8);
+
+            if (clsIdx < 0 || clsIdx > classes.Count) return false;
+            if (ptr == 0 || size == 0) return false;
+            if (pos + 12 + (long)size > _blob.Length) return false;
+
+            // Objekt-Eintraege muessen zur Klassengroesse passen
+            if (clsIdx > 0 && classes[clsIdx - 1].Size != (int)size) return false;
+
+            entries.Add((clsIdx, ptr, (int)size, pos + 12));
+            pos += 12 + (int)size;
+        }
+
+        // Der Blob muss vollstaendig konsumiert sein (bis auf < 12 Padding-Bytes)
+        if (_blob.Length - pos >= 12) return false;
+        if (entries.Count == 0) return false;
+
+        foreach (var (clsIdx, ptr, size, dataOff) in entries)
+        {
+            if (!_ptrLookup.ContainsKey(ptr))
+            {
+                _ptrLookup[ptr] = new InlineEntry
+                {
+                    RuntimePtr = ptr,
+                    BlobOffset = dataOff,
+                    Size = size
+                };
+            }
+
+            if (clsIdx > 0)
+            {
+                var cls = classes[clsIdx - 1];
+                _objects.Add(new ObjectEntry
+                {
+                    RuntimePtr = ptr,
+                    BlobOffset = dataOff,
+                    Size = size,
+                    ClassName = cls.Name,
+                    ClassDef = cls
+                });
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Phase 1 (Fallback): Scanne den Blob nach [ptr:4][size:4][data:size] Einträgen
     /// und baue die Pointer-Lookup-Tabelle auf.
     /// </summary>
     private void BuildPointerLookup()

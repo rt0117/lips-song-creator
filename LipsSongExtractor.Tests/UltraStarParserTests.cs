@@ -143,7 +143,7 @@ E
     public void BeatToSeconds_FirstNote()
     {
         var song = UltraStarParser.Parse(SampleSong);
-        // Beat 0: GAP/1000 + 0 * 60/400 = 5.0 + 0 = 5.0s
+        // Beat 0: GAP/1000 + 0 = 5.0s
         Assert.Equal(5.0f, song.BeatToSeconds(0), 3);
     }
 
@@ -151,16 +151,17 @@ E
     public void BeatToSeconds_WithOffset()
     {
         var song = UltraStarParser.Parse(SampleSong);
-        // Beat 20: 5.0 + 20 * 60/400 = 5.0 + 3.0 = 8.0s
-        Assert.Equal(8.0f, song.BeatToSeconds(20), 3);
+        // UltraStar-Beats sind Viertel-Beats:
+        // Beat 20: 5.0 + 20 * 60/(400*4) = 5.0 + 0.75 = 5.75s
+        Assert.Equal(5.75f, song.BeatToSeconds(20), 3);
     }
 
     [Fact]
     public void BeatsToSeconds_Length()
     {
         var song = UltraStarParser.Parse(SampleSong);
-        // 5 Beats: 5 * 60/400 = 0.75s
-        Assert.Equal(0.75f, song.BeatsToSeconds(5), 3);
+        // 5 Beats: 5 * 60/(400*4) = 0.1875s
+        Assert.Equal(0.1875f, song.BeatsToSeconds(5), 3);
     }
 
     // ── MIDI/Lips-Konvertierung ─────────────────────────────────
@@ -212,8 +213,8 @@ E
     {
         var song = UltraStarParser.Parse(SampleSong);
         // Last singable note: beat 40, length 4 -> end beat 44
-        // Time = 5.0 + 44 * 60/400 = 5.0 + 6.6 = 11.6s
-        Assert.Equal(11.6f, song.DurationSeconds, 1);
+        // Time = 5.0 + 44 * 60/(400*4) = 5.0 + 1.65 = 6.65s
+        Assert.Equal(6.65f, song.DurationSeconds, 1);
     }
 
     // ── Edge Cases ──────────────────────────────────────────────

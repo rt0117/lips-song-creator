@@ -62,6 +62,9 @@ public static class UltraStarParser
                     case "VIDEOGAP":
                         song.VideoGapSeconds = ParseFloat(value);
                         break;
+                    case "PREVIEWSTART":
+                        song.PreviewStartSeconds = ParseFloat(value);
+                        break;
                     case "RELATIVE":
                         song.IsRelative = value == "YES" || value == "yes" || value == "1";
                         break;
@@ -172,6 +175,7 @@ public class UltraStarSong
     public float Bpm { get; set; }
     public float GapMs { get; set; }
     public float VideoGapSeconds { get; set; }
+    public float PreviewStartSeconds { get; set; }
     public bool IsRelative { get; set; }
 
     public List<UltraStarNote> Notes { get; set; } = [];
@@ -183,10 +187,12 @@ public class UltraStarSong
 
     /// <summary>
     /// Konvertiert einen Beat in Sekunden.
+    /// UltraStar-Formel: Sekunden = GAP/1000 + Beat * 60 / (BPM * 4)
+    /// (Beats sind Viertel-Beats; verifiziert gegen #END-Tags echter Songs).
     /// </summary>
     public float BeatToSeconds(int beat)
     {
-        return GapMs / 1000f + beat * 60f / Bpm;
+        return GapMs / 1000f + beat * 60f / (Bpm * 4f);
     }
 
     /// <summary>
@@ -194,7 +200,7 @@ public class UltraStarSong
     /// </summary>
     public float BeatsToSeconds(int beats)
     {
-        return beats * 60f / Bpm;
+        return beats * 60f / (Bpm * 4f);
     }
 
     /// <summary>

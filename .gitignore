@@ -63,5 +63,22 @@ Example/*.zip
 Example/*.db3
 Example/GameContentDB
 
+## A/B test packages for Xbox debugging (generated, up to 100 MB each)
+Example/_abtest/
+
+## UltraStar test songs: keep .txt charts, ignore media (copyright + size)
+Example/Ultrastar/**/*.mp3
+Example/Ultrastar/**/*.mp4
+Example/Ultrastar/**/*.mkv
+Example/Ultrastar/**/*.webm
+Example/Ultrastar/**/*.m4a
+Example/Ultrastar/**/*.ogg
+Example/Ultrastar/**/*.flac
+## Generated pipeline output (out*/ folders incl. STFS packages)
+Example/Ultrastar/**/out*/
+
+## External tools (download separately: ffmpeg, xWMAEncode from DirectX SDK)
+tools/
+
 ## Vendor libraries (restored via libman/npm)
 **/wwwroot/lib/

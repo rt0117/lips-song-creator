@@ -4,14 +4,16 @@ namespace LipsSongExtractor;
 
 /// <summary>
 /// Baut einen IXB Binary Blob from scratch auf.
-/// 
-/// Blob-Format:
-///   [initial zero:4]
-///   [inline entries: ptr(4) + size(4) + data(size)]...  (Strings, Arrays)
-///   [object entries: ptr(4) + size(4) + data(size)]...  (Objekte)
 ///
-/// Jeder Eintrag hat eine runtime_ptr (frei vergeben, muss nur eindeutig sein).
-/// Objekte referenzieren Inline-Daten und andere Objekte ueber diese Pointer.
+/// Blob-Format (verifiziert gegen Original-DLCs, Happy Ending):
+///   Jeder Eintrag: [classIndex:4][runtime_ptr:4][size:4][data:size]
+///   - classIndex = 0            fuer Inline-Daten (Strings, Arrays)
+///   - classIndex = 1-basierter  Index in die &lt;Classes&gt;-Liste fuer Objekte
+///
+/// Der Loader liest NumOfElements Eintraege sequentiell und instanziiert
+/// Objekte anhand des Klassen-Index. Pointer werden in einem zweiten
+/// Durchlauf aufgeloest (Forward-Referenzen sind erlaubt).
+/// Das Root-ixPackage MUSS der letzte Eintrag sein.
 /// </summary>
 public class IxbBlobBuilder
 {
@@ -28,7 +30,7 @@ public class IxbBlobBuilder
     }
 
     /// <summary>
-    /// Registriert rohe Inline-Daten und gibt den Pointer zurueck.
+    /// Registriert rohe Inline-Daten (classIndex=0) und gibt den Pointer zurueck.
     /// </summary>
     public uint AddInlineData(byte[] data)
     {
@@ -39,7 +41,7 @@ public class IxbBlobBuilder
         {
             Ptr = ptr,
             Data = data,
-            IsObject = false
+            ClassIndex = 0
         });
 
         return ptr;
@@ -57,10 +59,10 @@ public class IxbBlobBuilder
     }
 
     /// <summary>
-    /// Registriert ein Objekt mit fixer Groesse und gibt den Pointer zurueck.
-    /// Die Daten werden spaeter ueber den zurueckgegebenen ObjectWriter geschrieben.
+    /// Registriert ein Objekt mit Klassen-Index (1-basiert, Position in der
+    /// &lt;Classes&gt;-Liste des XML-Headers) und fixer Groesse.
     /// </summary>
-    public ObjectWriter AddObject(int classSize)
+    public ObjectWriter AddObject(int classIndex, int classSize)
     {
         var ptr = _nextPtr;
         _nextPtr += 0x100;
@@ -70,34 +72,23 @@ public class IxbBlobBuilder
         {
             Ptr = ptr,
             Data = data,
-            IsObject = true
+            ClassIndex = classIndex
         });
 
         return new ObjectWriter(data, ptr);
     }
 
     /// <summary>
-    /// Baut den fertigen Blob zusammen.
-    /// Reihenfolge: [zero:4] [inline entries] [object entries]
+    /// Baut den fertigen Blob zusammen. Eintraege in Registrierungs-Reihenfolge:
+    /// [classIndex:4][ptr:4][size:4][data] ...
     /// </summary>
     public byte[] Build()
     {
         var ms = new MemoryStream();
 
-        // Initial zero (4 bytes)
-        ms.Write(new byte[4]);
-
-        // Inline-Daten zuerst
-        foreach (var e in _entries.Where(e => !e.IsObject))
+        foreach (var e in _entries)
         {
-            WriteBE(ms, e.Ptr);
-            WriteBE(ms, (uint)e.Data.Length);
-            ms.Write(e.Data);
-        }
-
-        // Objekte danach
-        foreach (var e in _entries.Where(e => e.IsObject))
-        {
+            WriteBE(ms, (uint)e.ClassIndex);
             WriteBE(ms, e.Ptr);
             WriteBE(ms, (uint)e.Data.Length);
             ms.Write(e.Data);
@@ -131,7 +122,7 @@ public class IxbBlobBuilder
     {
         public uint Ptr { get; init; }
         public byte[] Data { get; init; } = [];
-        public bool IsObject { get; init; }
+        public int ClassIndex { get; init; }
     }
 }
 
@@ -184,5 +175,13 @@ public class ObjectWriter
     public void WriteStringVector(int offset, uint stringPtr, int stringLength, int reserve = 0)
     {
         WriteVector(offset, stringPtr, stringLength, reserve > 0 ? reserve : stringLength);
+    }
+
+    /// <summary>
+    /// Schreibt rohe Bytes an einen Offset.
+    /// </summary>
+    public void WriteData(int offset, byte[] data)
+    {
+        Array.Copy(data, 0, _data, offset, data.Length);
     }
 }

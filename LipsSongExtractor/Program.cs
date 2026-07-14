@@ -360,10 +360,11 @@ void CmdDumpDb(string dbPath)
 
 void CmdConvertUltraStar(string txtPath, string outputDir)
 {
-    Console.WriteLine($"=== UltraStar -> Lips konvertieren ===");
+    Console.WriteLine($"=== UltraStar -> Lips DLC Pipeline ===");
     Console.WriteLine($"Quelle: {txtPath}");
     Console.WriteLine();
 
+    var songDir = Path.GetDirectoryName(Path.GetFullPath(txtPath)) ?? ".";
     var content = File.ReadAllText(txtPath);
     var song = UltraStarParser.Parse(content);
 
@@ -377,7 +378,7 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
 
     Directory.CreateDirectory(outputDir);
 
-    // Song-Paket erstellen
+    // ── 1. Chart + Lyric + DLC.xml generieren ──────────────────────
     var input = new LipsSongPackageBuilder.SongInput
     {
         Title = song.Title,
@@ -391,35 +392,122 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
 
     var pkg = LipsSongPackageBuilder.Build(input);
 
-    // Einzeldateien speichern
     Console.WriteLine("Generierte Dateien:");
     foreach (var (name, data) in pkg.Files)
-    {
-        var outPath = Path.Combine(outputDir, name);
-        File.WriteAllBytes(outPath, data);
         Console.WriteLine($"  {name} ({data.Length:N0} Bytes)");
+
+    // ── 2. Audio konvertieren (MP3 -> xWMA + Preview) ──────────────
+    var toolError = AudioConverter.CheckTools();
+    var audioPath = song.AudioFile.Length > 0 ? Path.Combine(songDir, song.AudioFile) : null;
+
+    // Fallback: referenzierte Datei fehlt -> nach Audio/Video im Ordner suchen
+    // (ffmpeg extrahiert die Audiospur auch aus Videodateien)
+    if (audioPath == null || !File.Exists(audioPath))
+    {
+        var audioExtensions = new[] { ".mp3", ".m4a", ".ogg", ".flac", ".wav", ".wma", ".mp4", ".mkv", ".webm" };
+        var candidate = Directory.GetFiles(songDir)
+            .Where(f => audioExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+            .OrderBy(f => Path.GetExtension(f).ToLowerInvariant() is ".mp4" or ".mkv" or ".webm" ? 1 : 0)
+            .FirstOrDefault();
+        if (candidate != null)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"HINWEIS: '{song.AudioFile}' nicht gefunden, verwende stattdessen: {Path.GetFileName(candidate)}");
+            audioPath = candidate;
+        }
     }
 
-    // STFS-Paket erstellen
-    var stfsPath = Path.Combine(outputDir, $"{song.Title}_LipsDLC");
+    if (audioPath != null && File.Exists(audioPath) && toolError == null)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Konvertiere Audio: {Path.GetFileName(audioPath)}");
+
+        var xwmaPath = Path.Combine(outputDir, $"{song.Title}.xWMA");
+        AudioConverter.ConvertToXwma(audioPath, xwmaPath);
+        pkg.Files[$"{song.Title}.xWMA"] = File.ReadAllBytes(xwmaPath);
+        Console.WriteLine($"  {song.Title}.xWMA ({pkg.Files[$"{song.Title}.xWMA"].Length:N0} Bytes)");
+
+        // Preview: #PREVIEWSTART oder 30% der Songlaenge
+        var previewStart = song.PreviewStartSeconds > 0
+            ? song.PreviewStartSeconds
+            : AudioConverter.GetDurationSeconds(audioPath) * 0.3;
+        var prvPath = Path.Combine(outputDir, $"{song.Title}_prv.xWMA");
+        AudioConverter.CreatePreviewXwma(audioPath, prvPath, previewStart);
+        pkg.Files[$"{song.Title}_prv.xWMA"] = File.ReadAllBytes(prvPath);
+        Console.WriteLine($"  {song.Title}_prv.xWMA ({pkg.Files[$"{song.Title}_prv.xWMA"].Length:N0} Bytes, ab {previewStart:F0}s)");
+    }
+    else if (audioPath != null && File.Exists(audioPath) && toolError != null)
+    {
+        Console.WriteLine();
+        Console.WriteLine("WARNUNG: Audio wird NICHT konvertiert.");
+        Console.WriteLine(toolError);
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine($"WARNUNG: Audio-Datei nicht gefunden: {audioPath ?? "(kein #MP3-Tag)"}");
+    }
+
+    // ── 3. Cover konvertieren ───────────────────────────────────────
+    var coverPath = song.CoverFile.Length > 0 ? Path.Combine(songDir, song.CoverFile) : null;
+    if (coverPath != null && File.Exists(coverPath))
+    {
+        var jpgName = $"{song.Title}.jpg";
+        if (toolError == null)
+        {
+            var jpgPath = Path.Combine(outputDir, jpgName);
+            AudioConverter.ConvertCoverToJpg(coverPath, jpgPath);
+            pkg.Files[jpgName] = File.ReadAllBytes(jpgPath);
+        }
+        else if (coverPath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                 coverPath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            pkg.Files[jpgName] = File.ReadAllBytes(coverPath);
+        }
+
+        if (pkg.Files.ContainsKey(jpgName))
+            Console.WriteLine($"  {jpgName} ({pkg.Files[jpgName].Length:N0} Bytes)");
+    }
+    else
+    {
+        Console.WriteLine($"WARNUNG: Kein Cover gefunden ({song.CoverFile})");
+    }
+
+    // ── 4. Einzeldateien speichern (fuer Inspektion/Nachbearbeitung) ──
+    foreach (var (name, data) in pkg.Files)
+        File.WriteAllBytes(Path.Combine(outputDir, name), data);
+
+    // ── 5. STFS LIVE-Paket erstellen ────────────────────────────────
+    Console.WriteLine();
+    Console.WriteLine("Erstelle STFS LIVE-Paket...");
     var stfsData = StfsWriter.CreatePackage(
         pkg.Files,
         $"\"{song.Title}\"",
         $"{song.Artist} - {song.Title}",
         titleId: 0x4D530888,
         contentType: 0x00000002);
+
+    // Dateiname MUSS ContentID + "4D" sein (ContentID = SHA1 des Headers)
+    var requiredName = StfsWriter.GetRequiredFileName(stfsData);
+    var stfsPath = Path.Combine(outputDir, requiredName);
     File.WriteAllBytes(stfsPath, stfsData);
-    Console.WriteLine($"  {Path.GetFileName(stfsPath)} ({stfsData.Length:N0} Bytes) [STFS LIVE-Paket]");
+    Console.WriteLine($"  {requiredName} ({stfsData.Length:N0} Bytes)");
 
     Console.WriteLine();
-    Console.WriteLine("=== HINWEIS ===");
-    Console.WriteLine("Das Paket enthaelt KEIN Audio. Du musst noch hinzufuegen:");
-    Console.WriteLine($"  {song.Title}.xWMA     - Haupt-Audio (konvertieren mit xWMAEncode)");
-    Console.WriteLine($"  {song.Title}_prv.xWMA - Audio-Preview (15-30s Ausschnitt)");
-    Console.WriteLine($"  {song.Title}.jpg      - Album-Cover");
-    Console.WriteLine();
-    Console.WriteLine("Sobald Audio+Cover vorhanden, nochmal create-test-dlc ausfuehren:");
-    Console.WriteLine($"  dotnet run -- create-test-dlc \"{outputDir}\" \"{stfsPath}\"");
+    var hasAudio = pkg.Files.ContainsKey($"{song.Title}.xWMA");
+    if (hasAudio)
+    {
+        Console.WriteLine("=== FERTIG - Komplett-Paket mit Audio ===");
+        Console.WriteLine($"1. Datei '{requiredName}' auf die Xbox kopieren nach:");
+        Console.WriteLine("   Content/0000000000000000/4D530888/00000002/");
+        Console.WriteLine("2. Dateiname exakt beibehalten (enthaelt die ContentID)!");
+    }
+    else
+    {
+        Console.WriteLine("=== UNVOLLSTAENDIG - Audio fehlt ===");
+        Console.WriteLine("Fehlende Dateien in den Ausgabe-Ordner legen und dann:");
+        Console.WriteLine($"  dotnet run -- create-test-dlc \"{outputDir}\" \"{outputDir}\"");
+    }
 }
 
 void CmdDump(string filePath, string className)
