@@ -199,6 +199,20 @@ public class UltraStarSong
     public float PreviewStartSeconds { get; set; }
     public bool IsRelative { get; set; }
 
+    /// <summary>
+    /// Echte Audio-Dauer in Sekunden (von der Pipeline gesetzt, via ffmpeg).
+    /// Wichtig fuer das Song-Ende: Der Suspend-Marker muss am AUDIO-Ende
+    /// liegen, nicht am Ende der letzten Note - sonst wird der Song
+    /// abgeschnitten statt auszuklingen.
+    /// </summary>
+    public double AudioDurationSeconds { get; set; }
+
+    /// <summary>
+    /// Effektives Song-Ende: Audio-Dauer wenn bekannt, sonst letzte Note.
+    /// </summary>
+    public double EffectiveEndSeconds =>
+        AudioDurationSeconds > 0 ? Math.Max(AudioDurationSeconds, DurationSeconds) : DurationSeconds;
+
     public List<UltraStarNote> Notes { get; set; } = [];
 
     /// <summary>

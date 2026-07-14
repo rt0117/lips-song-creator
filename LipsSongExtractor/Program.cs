@@ -416,10 +416,19 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
     }
     var hasVideo = videoPath != null && toolError == null && AudioConverter.HasVideoStream(videoPath);
 
+    // Echte Audio-Dauer ermitteln: Der Song soll bis zum AUDIO-Ende laufen
+    // (ausklingen), nicht bei der letzten Note abbrechen
+    if (audioPath != null && File.Exists(audioPath) && toolError == null)
+    {
+        song.AudioDurationSeconds = AudioConverter.GetDurationSeconds(audioPath);
+        if (song.AudioDurationSeconds > song.DurationSeconds)
+            Console.WriteLine($"Audio-Dauer: {song.AudioDurationSeconds:F1}s (Song laeuft bis zum Audio-Ende)");
+    }
+
     // Preview-Start: #PREVIEWSTART oder 30% der Songlaenge
     var previewStart = (double)song.PreviewStartSeconds;
-    if (previewStart <= 0 && audioPath != null && File.Exists(audioPath) && toolError == null)
-        previewStart = AudioConverter.GetDurationSeconds(audioPath) * 0.3;
+    if (previewStart <= 0 && song.AudioDurationSeconds > 0)
+        previewStart = song.AudioDurationSeconds * 0.3;
 
     // ── 2. Chart + Lyric + DLC.xml generieren ──────────────────────
     var input = new LipsSongPackageBuilder.SongInput
@@ -429,7 +438,7 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
         Genre = song.Genre.Length > 0 ? song.Genre : "Pop",
         Year = song.Year.Length > 0 ? song.Year : "2024",
         Language = song.Language.Length > 0 ? song.Language : "EN",
-        LengthSeconds = (int)song.DurationSeconds,
+        LengthSeconds = (int)song.EffectiveEndSeconds,
         UltraStarSong = song,
         PreviewStartSeconds = previewStart,
         HasVideo = hasVideo,

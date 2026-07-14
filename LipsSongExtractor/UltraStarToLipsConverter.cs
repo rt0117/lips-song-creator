@@ -117,11 +117,14 @@ public static class UltraStarToLipsConverter
             sectionPtrs.Add(w.Ptr);
         }
 
-        // ixSeqSuspend am Song-Ende (Original: Trigger=SongEnde+~0.6s, Track=1).
+        // ixSeqSuspend am Song-Ende (Original: Trigger=AudioEnde+~0.6s, Track=1).
         // KRITISCH: Ohne Suspend laeuft der Sequencer ueber das Datenende hinaus.
+        // WICHTIG: AUDIO-Ende verwenden, nicht das Ende der letzten Note -
+        // sonst wird der Song abgeschnitten statt auszuklingen!
+        var songEnd = (float)song.EffectiveEndSeconds;
         var suspend = builder.AddObject(CLS_SEQ_SUSPEND, SZ_SEQ_SUSPEND);
         suspend.WriteU32(4, 1);
-        suspend.WriteF32(8, song.DurationSeconds + 0.6f);
+        suspend.WriteF32(8, songEnd + 0.6f);
         suspend.WriteF32(12, 0.0786f);
         suspend.WriteI32(16, 1);           // m_iTrackIndex = 1 (wie Original)
         sectionPtrs.Add(suspend.Ptr);
@@ -140,7 +143,7 @@ public static class UltraStarToLipsConverter
         var audioMarker = builder.AddObject(CLS_AUDIO_MARKER, SZ_AUDIO_MARKER);
         audioMarker.WriteU32(4, 1);                     // m_uiReferenceCount
         audioMarker.WriteF32(8, 0f);                    // m_fTriggerTiming = Audio-Start
-        audioMarker.WriteF32(12, song.DurationSeconds); // m_fLength = Song-Dauer
+        audioMarker.WriteF32(12, (float)song.EffectiveEndSeconds); // m_fLength = Audio-Dauer
         audioMarker.WriteI32(16, 0);                    // m_iTrackIndex
         audioMarker.WriteStringVector(20, pvPathPtr, pvPathLen); // m_strAudioName
 
@@ -166,7 +169,7 @@ public static class UltraStarToLipsConverter
 
         var timeTag3 = builder.AddObject(CLS_NAME_TAG, SZ_NAME_TAG);
         timeTag3.WriteU32(4, 1);
-        timeTag3.WriteF32(8, song.DurationSeconds + 2);
+        timeTag3.WriteF32(8, (float)song.EffectiveEndSeconds + 2);
         timeTag3.WriteF32(12, 0.078f);
         timeTag3.WriteStringVector(20, stopPtr, stopLen);
 
@@ -399,13 +402,17 @@ public static class UltraStarToLipsConverter
             // lpsMelodyMarker, gleiches Layout) fuer Melodie-Noten - das
             // Spiel castet vermutlich darauf.
             var w = builder.AddObject(CLS_PHRASE_MARKER, SZ_MELODY_MARKER);
+            var midi = note.MidiNote + octaveShift;
             w.WriteU32(4, 1); // m_uiReferenceCount
             w.WriteF32(8, song.BeatToSeconds(note.StartBeat)); // m_fTriggerTiming
             w.WriteF32(12, song.BeatsToSeconds(note.Length)); // m_fLength
-            w.WriteI32(16, 0); // m_iTrackIndex
+            // m_iTrackIndex = ANZEIGE-LANE der Note!
+            // Verifiziert am Original: Track = 139 - MIDI-Note
+            // (midi 80->59, 85->54, 87->52, 89->50). Track 0 = alle Noten
+            // auf derselben Hoehe.
+            w.WriteI32(16, 139 - midi);
             w.WriteU32(20, 0); // m_bTriggered
-            // m_Tone: oktav-normalisiert in den Lips-Anzeigebereich
-            var midi = note.MidiNote + octaveShift;
+            // m_Tone: fuer die Pitch-Erkennung (Mikrofon)
             w.WriteF32(24, midi % 12); // fIdx (Halbton in der Oktave)
             w.WriteI32(28, midi / 12 - 1); // octave
             w.WriteU32(32, 0); // m_bTilt
@@ -415,6 +422,23 @@ public static class UltraStarToLipsConverter
             melodyWriters.Add(w);
         }
 
+        // End-of-Word-Flags vorab berechnen, mit Tilden-Propagation:
+        // "runs" + "~" + "~ " = eine Silbe "runs", deren Wortende am
+        // LETZTEN Tilden-Fortsetzungsmarker haengt. Ohne Propagation
+        // klebt das naechste Wort an ("runsout").
+        var endOfWord = new bool[notes.Count];
+        for (var i = 0; i < notes.Count; i++)
+            endOfWord[i] = notes[i].Text.EndsWith(" ") || notes[i].Text.EndsWith("-") ||
+                           i + 1 >= notes.Count;
+        for (var i = notes.Count - 1; i > 0; i--)
+        {
+            var isTildeOnly = notes[i].Text.Replace("~", "").Trim().Length == 0;
+            if (isTildeOnly && endOfWord[i])
+            {
+                endOfWord[i - 1] = true; // Wortende auf Text-Silbe zurueckschieben
+            }
+        }
+
         var lyricPtrs = new List<uint>();
         for (var i = 0; i < notes.Count; i++)
         {
@@ -422,8 +446,7 @@ public static class UltraStarToLipsConverter
             // UltraStar-Tilde (~) = Tonhoehenwechsel derselben Silbe, KEIN Text.
             // Ohne Filterung erscheinen "~~~" im Spiel als Lyrics.
             var text = note.Text.Replace("~", "").TrimEnd();
-            var isEndOfWord = note.Text.EndsWith(" ") || note.Text.EndsWith("-") ||
-                              i + 1 >= notes.Count;
+            var isEndOfWord = endOfWord[i];
 
             // Eigene String-Kopie pro Marker (kein Sharing - Double-Free!)
             var textPtr = builder.AddString(text);
