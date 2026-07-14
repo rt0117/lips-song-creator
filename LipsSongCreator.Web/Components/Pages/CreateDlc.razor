@@ -88,7 +88,15 @@
                     @if (!YouTubeDownloader.IsAvailable)
                     {
                         <div style="color:var(--accent-secondary);font-size:0.75rem;margin-top:0.3rem;">
-                            yt-dlp.exe fehlt. <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank">Download</a> und in tools/ ablegen.
+                            yt-dlp fehlt. <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank">Download</a> und in tools/ ablegen.
+                        </div>
+                    }
+                    else if (!YouTubeDownloader.HasCookieSource)
+                    {
+                        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.3rem;line-height:1.4;">
+                            Tipp: Falls YouTube den Download blockiert ("Bot-Erkennung"),
+                            eine <code>cookies.txt</code> in den tools/-Ordner legen
+                            (Browser-Extension "Get cookies.txt LOCALLY").
                         </div>
                     }
                 </div>

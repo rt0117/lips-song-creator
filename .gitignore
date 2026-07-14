@@ -85,3 +85,7 @@ tools/
 
 ## Generated STFS packages anywhere in Ultrastar folders (40-hex + 4D name)
 Example/Ultrastar/**/*4D
+
+## YouTube-Cookies (Session-Daten - NIEMALS committen)
+tools/cookies.txt
+cookies.txt
