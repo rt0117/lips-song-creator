@@ -55,6 +55,7 @@ public static class UltraStarToLipsConverter
     private const int CLS_NAME_TAG = 28;
     private const int CLS_TEMPO_MAP = 29;
     private const int CLS_TEMPO_CODE = 31;
+    private const int CLS_SECTION_PATTERN = 32;   // ixSeqSongSectionPatternCode
     private const int CLS_AUDIO_MARKER = 34;
     private const int CLS_MARKER = 36;
     private const int CLS_MELODY_MARKER = 37;
@@ -69,6 +70,7 @@ public static class UltraStarToLipsConverter
     private const int SZ_AUDIO_MARKER = 36;       // ixAudioMarker
     private const int SZ_SHORT_END = 24;          // lpsShortEndMarker
     private const int SZ_SEQ_SUSPEND = 20;        // ixSeqSuspend
+    private const int SZ_SECTION_PATTERN = 32;    // ixSeqSongSectionPatternCode
 
     /// <summary>
     /// Konvertiert einen UltraStar-Song in die Roh-Bestandteile einer .X360-Datei.
@@ -173,6 +175,35 @@ public static class UltraStarToLipsConverter
         timeTag3.WriteF32(12, 0.078f);
         timeTag3.WriteStringVector(20, stopPtr, stopLen);
 
+        // Song-Struktur-Codes (Conductor): steuern die Gameplay-Phasen.
+        // Original endet mit Type=21 kurz nach der letzten Note - das ist
+        // das "Outro"-Signal, das Lyrics/Gesangs-HUD ausblendet und nur
+        // noch das Video zeigt, waehrend das Audio ausklingt.
+        var lastNoteEnd = singableP1.Count > 0
+            ? song.BeatToSeconds(singableP1[^1].StartBeat) +
+              song.BeatsToSeconds(singableP1[^1].Length)
+            : song.DurationSeconds;
+
+        var introCode = builder.AddObject(CLS_SECTION_PATTERN, SZ_SECTION_PATTERN);
+        introCode.WriteU32(4, 1);
+        introCode.WriteF32(8, singableP1.Count > 0
+            ? Math.Max(0f, song.BeatToSeconds(singableP1[0].StartBeat) - 0.5f)
+            : 0f);
+        introCode.WriteF32(12, 0.0781f);
+        introCode.WriteI32(16, 0);   // m_iTrackIndex
+        introCode.WriteI32(20, 1);   // m_Type = 1 (Intro/Verse, wie Original-Anfang)
+        introCode.WriteI32(24, 1);   // m_Group
+        introCode.WriteI32(28, 1);   // m_Pattern
+
+        var outroCode = builder.AddObject(CLS_SECTION_PATTERN, SZ_SECTION_PATTERN);
+        outroCode.WriteU32(4, 1);
+        outroCode.WriteF32(8, lastNoteEnd + 0.5f);
+        outroCode.WriteF32(12, 0.0781f);
+        outroCode.WriteI32(16, 0);
+        outroCode.WriteI32(20, 21);  // m_Type = 21 = Outro/End (blendet HUD aus)
+        outroCode.WriteI32(24, 1);
+        outroCode.WriteI32(28, 1);
+
         // Conductor: ixSeqTempoCode mit BPM (KRITISCH - ohne Tempo laedt der Song nicht)
         var tempoCode = builder.AddObject(CLS_TEMPO_CODE, SZ_TEMPO_CODE);
         tempoCode.WriteU32(4, 1);              // m_uiReferenceCount
@@ -200,7 +231,9 @@ public static class UltraStarToLipsConverter
 
         var timeSeq = Seq("Time", [timeTag1.Ptr, timeTag2.Ptr, timeTag3.Ptr]);
         // Conductor ist eine ixTempoMap (cls=29, Size=104 wie ixSequence)!
-        var conductorSeq = Seq("Conductor", [tempoCode.Ptr], CLS_TEMPO_MAP);
+        // Enthaelt Tempo + Song-Struktur-Codes (zeitlich sortiert)
+        var conductorSeq = Seq("Conductor",
+            [tempoCode.Ptr, introCode.Ptr, outroCode.Ptr], CLS_TEMPO_MAP);
         var audioSeq = Seq("Audio", [audioMarker.Ptr]);
         var lyricSeq = Seq("Lyric", lyricPtrs);
         var melodySeq = Seq("Melody", melodyPtrs);
