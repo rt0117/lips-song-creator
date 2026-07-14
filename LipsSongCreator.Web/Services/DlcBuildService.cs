@@ -10,7 +10,7 @@ namespace LipsSongCreator.Web.Services;
 public class DlcBuildService
 {
     /// <summary>Status-Text des aktuellen Build-Schritts (fuer die UI).</summary>
-    public string? CurrentStep { get; private set; }
+    public string? CurrentStep { get; set; }
 
     /// <summary>Wird nach jedem Fortschritts-Update gefeuert (UI-Refresh).</summary>
     public event Action? ProgressChanged;

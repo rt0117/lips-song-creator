@@ -1,0 +1,389 @@
+@page "/create"
+@using LipsSongCreator.Web.Services
+@using LipsSongExtractor
+@inject DlcBuildService DlcBuilder
+@inject SongService Song
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<div class="toolbar">
+    <span class="toolbar-brand">Lips Song Creator</span>
+    <div class="toolbar-sep"></div>
+    <button class="btn-t" @onclick='() => Nav.NavigateTo("/")'>Zurueck</button>
+    <div class="toolbar-meta">
+        <span>Neues DLC erstellen - Schritt @_step von 4</span>
+    </div>
+</div>
+
+<div class="wizard-container">
+    <!-- Schritt-Anzeige -->
+    <div class="wizard-steps">
+        @for (var i = 1; i <= 4; i++)
+        {
+            var step = i;
+            var state = step < _step ? "done" : step == _step ? "active" : "pending";
+            <div class="wiz-step @state" @onclick="() => GoToStep(step)">
+                <div class="wiz-num">@(state == "done" ? "\u2713" : step.ToString())</div>
+                <div class="wiz-label">@StepLabel(step)</div>
+            </div>
+            @if (i < 4) { <div class="wiz-line @state"></div> }
+        }
+    </div>
+
+    <!-- Schritt-Inhalt -->
+    <div class="wizard-content">
+        @if (_step == 1)
+        {
+            <h5>UltraStar-Chart</h5>
+            <p class="wiz-desc">Lade die UltraStar .txt-Datei hoch. Metadaten werden automatisch ausgelesen und koennen hier angepasst werden.</p>
+
+            <div class="drop-zone" style="max-width:400px;">
+                <div class="dz-icon">&#127926;</div>
+                <div class="dz-title">UltraStar .txt</div>
+                <InputFile OnChange="OnTxtSelected" accept=".txt,.TXT" />
+            </div>
+
+            @if (_txtLoaded)
+            {
+                <div class="meta-form" style="margin-top:1rem;">
+                    <label>Titel</label>
+                    <input type="text" @bind="_title" />
+                    <label>Artist</label>
+                    <input type="text" @bind="_artist" />
+                    <label>Genre</label>
+                    <input type="text" @bind="_genre" />
+                    <label>Jahr</label>
+                    <input type="text" @bind="_year" />
+                    <label>Sprache</label>
+                    <input type="text" @bind="_language" />
+                </div>
+                <div class="wiz-info">@_songInfo</div>
+            }
+        }
+        else if (_step == 2)
+        {
+            <h5>Audio / Video</h5>
+            <p class="wiz-desc">Audio-Datei hochladen oder YouTube-URL eingeben. ffmpeg und xWMAEncode muessen im tools/-Ordner liegen.</p>
+
+            <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+                <div class="drop-zone" style="flex:1;min-width:250px;">
+                    <div class="dz-icon">&#127911;</div>
+                    <div class="dz-title">Audio/Video-Datei</div>
+                    <div class="dz-sub">MP3, MP4, OGG, FLAC, WAV, MKV...</div>
+                    <InputFile OnChange="OnMediaSelected" accept=".mp3,.m4a,.ogg,.flac,.wav,.mp4,.mkv,.webm,.avi,.mov,.wmv" />
+                </div>
+
+                <div style="display:flex;align-items:center;color:var(--text-muted);">oder</div>
+
+                <div style="flex:1;min-width:250px;">
+                    <div class="dz-icon" style="font-size:1.5rem;">&#127909;</div>
+                    <label style="font-weight:bold;margin-bottom:0.3rem;">YouTube-URL</label>
+                    <input type="text" @bind="_youtubeUrl" placeholder="https://youtube.com/watch?v=..."
+                           style="width:100%;margin-bottom:0.5rem;" />
+                    <button class="btn-accent" @onclick="DownloadFromYouTube"
+                            disabled="@(_ytDownloading || string.IsNullOrWhiteSpace(_youtubeUrl))">
+                        @(_ytDownloading ? "Lade..." : "Von YouTube laden")
+                    </button>
+                    @if (!YouTubeDownloader.IsAvailable)
+                    {
+                        <div style="color:var(--accent-secondary);font-size:0.75rem;margin-top:0.3rem;">
+                            yt-dlp.exe fehlt. <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank">Download</a> und in tools/ ablegen.
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @if (_mediaFileName != null)
+            {
+                <div class="wiz-info" style="margin-top:0.5rem;">@_mediaFileName</div>
+            }
+        }
+        else if (_step == 3)
+        {
+            <h5>Cover-Bild</h5>
+            <p class="wiz-desc">Album-Cover hochladen (JPG/PNG, wird auf 512x512 skaliert). Kann auch uebersprungen werden - es wird dann das YouTube-Thumbnail oder ein leeres Cover verwendet.</p>
+
+            <div class="drop-zone" style="max-width:300px;">
+                <div class="dz-icon">&#128444;</div>
+                <div class="dz-title">Cover-Bild</div>
+                <InputFile OnChange="OnCoverSelected" accept=".jpg,.jpeg,.png" />
+            </div>
+
+            @if (_coverFileName != null)
+            {
+                <div class="wiz-info" style="margin-top:0.5rem;">@_coverFileName</div>
+            }
+        }
+        else if (_step == 4)
+        {
+            <h5>Zusammenfassung</h5>
+            <div class="wiz-summary">
+                <div><span class="lbl">Titel:</span> <strong>@_title</strong></div>
+                <div><span class="lbl">Artist:</span> <strong>@_artist</strong></div>
+                <div><span class="lbl">Genre:</span> @_genre / <span class="lbl">Jahr:</span> @_year / <span class="lbl">Sprache:</span> @_language</div>
+                <div><span class="lbl">Chart:</span> @(_txtFileName ?? "---")</div>
+                <div><span class="lbl">Audio/Video:</span> @(_mediaFileName ?? "---")</div>
+                <div><span class="lbl">Cover:</span> @(_coverFileName ?? "keins (Standard)")</div>
+            </div>
+
+            @if (_toolWarning != null)
+            {
+                <div style="color:var(--accent-secondary);font-size:0.8rem;white-space:pre-line;margin:0.5rem 0;">@_toolWarning</div>
+            }
+
+            @if (DlcBuilder.IsRunning)
+            {
+                <div style="display:flex;align-items:center;gap:0.5rem;margin:1rem 0;">
+                    <div class="spinner"></div>
+                    <span style="color:var(--text-secondary)">@(DlcBuilder.CurrentStep ?? "Baue DLC...")</span>
+                </div>
+            }
+        }
+
+        @if (_error != null)
+        {
+            <div style="color:var(--accent-secondary);margin-top:0.5rem;">@_error</div>
+        }
+    </div>
+
+    <!-- Navigation -->
+    <div class="wizard-nav">
+        @if (_step > 1)
+        {
+            <button class="btn-t" @onclick="PrevStep">Zurueck</button>
+        }
+        <div style="flex:1"></div>
+        @if (_step < 4)
+        {
+            <button class="btn-accent" @onclick="NextStep" disabled="@(!CanAdvance())">Weiter</button>
+        }
+        else
+        {
+            <button class="btn-accent" @onclick="BuildAndOpenEditor"
+                    disabled="@(DlcBuilder.IsRunning || _txtContent == null)">
+                DLC erstellen und im Editor oeffnen
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    private int _step = 1;
+    private string? _error;
+    private string? _toolWarning;
+
+    // Schritt 1: Chart
+    private string? _txtFileName;
+    private string? _txtContent;
+    private bool _txtLoaded;
+    private string _title = "", _artist = "", _genre = "Pop", _year = "2024", _language = "EN";
+    private string? _songInfo;
+
+    // Schritt 2: Audio/Video
+    private string? _mediaFileName;
+    private byte[]? _mediaBytes;
+    private string? _youtubeUrl;
+    private bool _ytDownloading;
+    private string? _ytWorkDir; // Temp-Ordner fuer YouTube-Downloads
+
+    // Schritt 3: Cover
+    private string? _coverFileName;
+    private byte[]? _coverBytes;
+
+    protected override void OnInitialized()
+    {
+        _toolWarning = DlcBuilder.CheckTools();
+        DlcBuilder.ProgressChanged += () => InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnTxtSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        try
+        {
+            using var reader = new StreamReader(e.File.OpenReadStream(10 * 1024 * 1024));
+            _txtContent = await reader.ReadToEndAsync();
+            _txtFileName = e.File.Name;
+
+            var song = UltraStarParser.Parse(_txtContent);
+            _title = song.Title;
+            _artist = song.Artist;
+            _genre = song.Genre.Length > 0 ? song.Genre : "Pop";
+            _year = song.Year.Length > 0 ? song.Year : "2024";
+            _language = song.Language.Length > 0 ? song.Language : "EN";
+            _songInfo = $"{song.SingableNotes.Count} Noten, BPM: {song.RealBpm:F0}, Dauer: {song.DurationSeconds:F0}s";
+            _txtLoaded = true;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task OnMediaSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(2L * 1024 * 1024 * 1024).CopyToAsync(ms);
+            _mediaBytes = ms.ToArray();
+            _mediaFileName = e.File.Name;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task DownloadFromYouTube()
+    {
+        if (string.IsNullOrWhiteSpace(_youtubeUrl)) return;
+        if (!YouTubeDownloader.IsValidUrl(_youtubeUrl))
+        {
+            _error = "Keine gueltige YouTube-URL.";
+            return;
+        }
+
+        _error = null;
+        _ytDownloading = true;
+        StateHasChanged();
+
+        try
+        {
+            _ytWorkDir = Path.Combine(Path.GetTempPath(), $"lips_yt_{Guid.NewGuid():N}");
+
+            var result = await Task.Run(() =>
+                YouTubeDownloader.Download(_youtubeUrl!, _ytWorkDir,
+                    step => { DlcBuilder.CurrentStep = step; InvokeAsync(StateHasChanged); }));
+
+            if (result.VideoPath != null)
+            {
+                _mediaBytes = await File.ReadAllBytesAsync(result.VideoPath);
+                _mediaFileName = Path.GetFileName(result.VideoPath);
+            }
+
+            if (result.ThumbnailPath != null && _coverBytes == null)
+            {
+                _coverBytes = await File.ReadAllBytesAsync(result.ThumbnailPath);
+                _coverFileName = Path.GetFileName(result.ThumbnailPath) + " (YouTube)";
+            }
+
+            if (!string.IsNullOrEmpty(result.Title) && string.IsNullOrEmpty(_title))
+                _title = result.Title;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally
+        {
+            _ytDownloading = false;
+            DlcBuilder.CurrentStep = null;
+            // Cleanup
+            if (_ytWorkDir != null && Directory.Exists(_ytWorkDir))
+                try { Directory.Delete(_ytWorkDir, true); } catch { }
+        }
+    }
+
+    private async Task OnCoverSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(20 * 1024 * 1024).CopyToAsync(ms);
+            _coverBytes = ms.ToArray();
+            _coverFileName = e.File.Name;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private bool CanAdvance() => _step switch
+    {
+        1 => _txtLoaded,
+        2 => _mediaBytes != null,
+        3 => true, // Cover optional
+        _ => true
+    };
+
+    private void NextStep()
+    {
+        if (_step < 4 && CanAdvance()) _step++;
+        _error = null;
+    }
+
+    private void PrevStep()
+    {
+        if (_step > 1) _step--;
+        _error = null;
+    }
+
+    private void GoToStep(int step)
+    {
+        if (step <= _step) { _step = step; _error = null; }
+    }
+
+    private async Task BuildAndOpenEditor()
+    {
+        if (_txtContent == null) return;
+        _error = null;
+
+        try
+        {
+            // Dateien zusammenstellen
+            var files = new Dictionary<string, byte[]>
+            {
+                [_txtFileName ?? "song.txt"] = System.Text.Encoding.UTF8.GetBytes(_txtContent)
+            };
+
+            if (_mediaBytes != null)
+                files[_mediaFileName ?? "audio.mp4"] = _mediaBytes;
+
+            if (_coverBytes != null)
+                files[_coverFileName?.Replace(" (YouTube)", "") ?? "cover.jpg"] = _coverBytes;
+
+            // Metadaten in die .txt einfliessen lassen: Header-Felder ueberschreiben
+            var txtKey = files.Keys.First(k => k.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+            var txt = System.Text.Encoding.UTF8.GetString(files[txtKey]);
+            txt = PatchUltraStarHeader(txt, _title, _artist, _genre, _year, _language);
+            files[txtKey] = System.Text.Encoding.UTF8.GetBytes(txt);
+
+            var result = await DlcBuilder.BuildAsync(files);
+
+            // Song im Editor laden (UltraStar-Modus)
+            Song.LoadUltraStar(_txtFileName ?? "song.txt", txt);
+
+            // STFS-Paket als Download anbieten
+            var stfsBytes = DlcBuilder.ReadAndCleanup(result);
+            var base64 = Convert.ToBase64String(stfsBytes);
+            await JS.InvokeVoidAsync("fileDownload.save", result.StfsFileName, base64);
+
+            // Zum Editor navigieren
+            Nav.NavigateTo("/editor");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Fehler: {ex.Message}";
+        }
+    }
+
+    private static string PatchUltraStarHeader(string txt, string title, string artist,
+        string genre, string year, string language)
+    {
+        txt = System.Text.RegularExpressions.Regex.Replace(txt, @"(?m)^#TITLE:.*$", $"#TITLE:{title}");
+        txt = System.Text.RegularExpressions.Regex.Replace(txt, @"(?m)^#ARTIST:.*$", $"#ARTIST:{artist}");
+
+        if (!txt.Contains("#GENRE:")) txt = $"#GENRE:{genre}\n" + txt;
+        else txt = System.Text.RegularExpressions.Regex.Replace(txt, @"(?m)^#GENRE:.*$", $"#GENRE:{genre}");
+
+        if (!txt.Contains("#YEAR:")) txt = $"#YEAR:{year}\n" + txt;
+        else txt = System.Text.RegularExpressions.Regex.Replace(txt, @"(?m)^#YEAR:.*$", $"#YEAR:{year}");
+
+        if (!txt.Contains("#LANGUAGE:")) txt = $"#LANGUAGE:{language}\n" + txt;
+        else txt = System.Text.RegularExpressions.Regex.Replace(txt, @"(?m)^#LANGUAGE:.*$", $"#LANGUAGE:{language}");
+
+        return txt;
+    }
+
+    private static string StepLabel(int step) => step switch
+    {
+        1 => "Chart",
+        2 => "Audio/Video",
+        3 => "Cover",
+        4 => "Erstellen",
+        _ => ""
+    };
+}

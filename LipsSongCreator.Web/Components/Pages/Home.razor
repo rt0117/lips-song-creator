@@ -1,59 +1,32 @@
 ﻿@page "/"
+@page "/editor"
 @using LipsSongCreator.Web.Services
 @inject SongService Song
-@inject DlcBuildService DlcBuilder
+@inject NavigationManager Nav
 @inject IJSRuntime JS
 @rendermode InteractiveServer
 
 @if (!Song.IsLoaded)
 {
-    <!-- ── Upload Screen ──────────────────────────────────────── -->
+    <!-- ── Landing Screen ──────────────────────────────────────── -->
     <div class="toolbar">
         <span class="toolbar-brand">Lips Song Creator</span>
     </div>
 
     <div class="upload-screen">
-        <!-- DLC-Builder: Komplett-Pipeline (txt + Audio/Video + Cover) -->
-        <div class="drop-zone">
+        <div class="drop-zone" style="cursor:pointer;" @onclick='() => Nav.NavigateTo("/create")'>
             <div class="dz-icon">&#128230;</div>
-            <div class="dz-title">DLC erstellen (Komplett-Paket)</div>
+            <div class="dz-title">Neues DLC erstellen</div>
             <div class="dz-sub">
-                UltraStar-Song-Dateien auswaehlen: .txt + MP3/MP4 + Cover.
-                Ergebnis: fertiges Xbox-DLC mit Audio, Video und Preview.
+                UltraStar-Song in ein fertiges Xbox-DLC umwandeln.
+                Schritt-fuer-Schritt-Assistent mit YouTube-Import.
             </div>
-            <InputFile OnChange="OnDlcFilesSelected" multiple
-                       accept=".txt,.mp3,.m4a,.ogg,.flac,.wav,.mp4,.mkv,.webm,.avi,.mov,.jpg,.jpeg,.png" />
-            @if (_toolWarning != null)
-            {
-                <div style="color:var(--accent-secondary);font-size:0.8rem;margin-top:0.5rem;white-space:pre-line;">@_toolWarning</div>
-            }
         </div>
 
-        @if (DlcBuilder.IsRunning)
-        {
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <div class="spinner"></div>
-                <span style="color:var(--text-secondary)">@(DlcBuilder.CurrentStep ?? "Baue DLC...")</span>
-            </div>
-        }
-        @if (_dlcResult != null)
-        {
-            <div style="max-width:520px;text-align:center;color:var(--text-secondary);">
-                <div style="color:var(--accent-primary);font-weight:bold;">DLC fertig!</div>
-                <div>@_dlcResult</div>
-                <div style="font-size:0.8rem;margin-top:0.4rem;">
-                    Auf die Xbox kopieren nach:<br />
-                    <code>Content/0000000000000000/4D530888/00000002/</code><br />
-                    Dateiname exakt beibehalten (enthaelt die ContentID)!
-                </div>
-            </div>
-        }
-
-        <!-- Editor: einzelne Datei ansehen/bearbeiten -->
         <div class="drop-zone">
             <div class="dz-icon">&#127925;</div>
-            <div class="dz-title">Song im Editor oeffnen</div>
-            <div class="dz-sub">.X360 (Lips) oder .txt (UltraStar) ansehen und bearbeiten</div>
+            <div class="dz-title">Song editieren</div>
+            <div class="dz-sub">.X360 (Lips) oder .txt (UltraStar) im Piano-Roll-Editor oeffnen</div>
             <InputFile OnChange="OnFileSelected" accept=".X360,.x360,.txt,.TXT" />
         </div>
 
@@ -235,8 +208,6 @@ else
 
     private bool _loading;
     private string? _error;
-    private string? _dlcResult;
-    private string? _toolWarning;
     private SongMetadata? _meta;
     private List<SequenceInfo> _sequences = [];
     private List<MarkerInfo> _activeMarkers = [];
@@ -248,61 +219,6 @@ else
     private int _pianoScrollY = 200; // Start etwas runter gescrollt
     private DotNetObjectReference<Home>? _dotNetRef;
     private bool _canvasInitialized;
-
-    protected override void OnInitialized()
-    {
-        _toolWarning = DlcBuilder.CheckTools();
-        DlcBuilder.ProgressChanged += () => InvokeAsync(StateHasChanged);
-    }
-
-    private async Task OnDlcFilesSelected(InputFileChangeEventArgs e)
-    {
-        _error = null;
-        _dlcResult = null;
-        StateHasChanged();
-
-        try
-        {
-            // Alle Dateien einlesen (Video kann gross sein -> 2 GB Limit)
-            var files = new Dictionary<string, byte[]>();
-            foreach (var file in e.GetMultipleFiles(20))
-            {
-                using var ms = new MemoryStream();
-                await file.OpenReadStream(2L * 1024 * 1024 * 1024).CopyToAsync(ms);
-                files[file.Name] = ms.ToArray();
-            }
-
-            if (!files.Keys.Any(k => k.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)))
-            {
-                _error = "Bitte auch die UltraStar .txt-Datei mit auswaehlen.";
-                return;
-            }
-
-            var result = await DlcBuilder.BuildAsync(files);
-
-            // Fertiges Paket als Download anbieten
-            var bytes = DlcBuilder.ReadAndCleanup(result);
-            var base64 = Convert.ToBase64String(bytes);
-            await JS.InvokeVoidAsync("fileDownload.save", result.StfsFileName, base64);
-
-            var parts = new List<string>
-            {
-                $"{result.StfsFileName} ({result.StfsSize / 1024.0 / 1024.0:F1} MB)"
-            };
-            if (!result.HasAudio) parts.Add("OHNE Audio!");
-            if (!result.HasVideo) parts.Add("ohne Video");
-            if (result.Warnings.Count > 0) parts.AddRange(result.Warnings);
-            _dlcResult = string.Join(" - ", parts);
-        }
-        catch (Exception ex)
-        {
-            _error = $"Fehler beim DLC-Bau: {ex.Message}";
-        }
-        finally
-        {
-            StateHasChanged();
-        }
-    }
 
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {

@@ -333,3 +333,94 @@ input:focus, select:focus, textarea:focus {
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 2px rgba(0,212,255,0.12);
 }
+
+/* ── Wizard ────────────────────────────────────────── */
+.wizard-container {
+    max-width: 720px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+.wizard-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 2rem;
+}
+.wiz-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.wiz-num {
+    width: 2rem; height: 2rem;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: bold; font-size: 0.85rem;
+    background: var(--surface-light);
+    color: var(--text-muted);
+    border: 2px solid var(--border);
+    transition: all 0.2s;
+}
+.wiz-step.active .wiz-num {
+    background: var(--accent-primary);
+    color: var(--bg-main);
+    border-color: var(--accent-primary);
+}
+.wiz-step.done .wiz-num {
+    background: var(--accent-green);
+    color: var(--bg-main);
+    border-color: var(--accent-green);
+}
+.wiz-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.3rem;
+}
+.wiz-step.active .wiz-label { color: var(--accent-primary); }
+.wiz-step.done .wiz-label { color: var(--accent-green); }
+.wiz-line {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    margin: 0 0.3rem;
+    margin-bottom: 1.2rem;
+}
+.wiz-line.done, .wiz-line.active {
+    background: var(--accent-primary);
+}
+.wizard-content {
+    min-height: 280px;
+}
+.wizard-content h5 {
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+.wiz-desc {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+.wiz-info {
+    color: var(--accent-green);
+    font-size: 0.85rem;
+    padding: 0.3rem 0;
+}
+.wiz-summary {
+    background: var(--surface-light);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    font-size: 0.9rem;
+    line-height: 1.8;
+}
+.wiz-summary .lbl {
+    color: var(--text-muted);
+}
+.wizard-nav {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
