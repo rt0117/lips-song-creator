@@ -372,192 +372,34 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
     Console.WriteLine($"Quelle: {txtPath}");
     Console.WriteLine();
 
-    var songDir = Path.GetDirectoryName(Path.GetFullPath(txtPath)) ?? ".";
-    var content = File.ReadAllText(txtPath);
-    var song = UltraStarParser.Parse(content);
-
-    Console.WriteLine($"Titel:    {song.Title}");
-    Console.WriteLine($"Artist:   {song.Artist}");
-    Console.WriteLine($"BPM:      {song.RealBpm:F0} (UltraStar: {song.Bpm})");
-    Console.WriteLine($"GAP:      {song.GapMs}ms");
-    Console.WriteLine($"Noten:    {song.SingableNotes.Count}");
-    Console.WriteLine($"Dauer:    {song.DurationSeconds:F1}s");
+    var songInfo = UltraStarParser.Parse(File.ReadAllText(txtPath));
+    Console.WriteLine($"Titel:    {songInfo.Title}");
+    Console.WriteLine($"Artist:   {songInfo.Artist}");
+    Console.WriteLine($"BPM:      {songInfo.RealBpm:F0} (UltraStar: {songInfo.Bpm})");
+    Console.WriteLine($"GAP:      {songInfo.GapMs}ms");
+    Console.WriteLine($"Noten:    {songInfo.SingableNotes.Count}");
+    Console.WriteLine($"Dauer:    {songInfo.DurationSeconds:F1}s (Noten)");
     Console.WriteLine();
 
-    Directory.CreateDirectory(outputDir);
-
-    // ── 1. Quell-Dateien finden (Audio/Video) ───────────────────────
-    var toolError = AudioConverter.CheckTools();
-    var audioPath = song.AudioFile.Length > 0 ? Path.Combine(songDir, song.AudioFile) : null;
-
-    // Fallback: referenzierte Datei fehlt -> nach Audio/Video im Ordner suchen
-    // (ffmpeg extrahiert die Audiospur auch aus Videodateien)
-    if (audioPath == null || !File.Exists(audioPath))
-    {
-        var audioExtensions = new[] { ".mp3", ".m4a", ".ogg", ".flac", ".wav", ".wma", ".mp4", ".mkv", ".webm" };
-        var candidate = Directory.GetFiles(songDir)
-            .Where(f => audioExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
-            .OrderBy(f => Path.GetExtension(f).ToLowerInvariant() is ".mp4" or ".mkv" or ".webm" ? 1 : 0)
-            .FirstOrDefault();
-        if (candidate != null)
-        {
-            Console.WriteLine($"HINWEIS: '{song.AudioFile}' nicht gefunden, verwende stattdessen: {Path.GetFileName(candidate)}");
-            audioPath = candidate;
-        }
-    }
-
-    // Video-Quelle: #VIDEO-Tag oder Videodatei im Ordner (ggf. == audioPath)
-    var videoPath = song.VideoFile.Length > 0 ? Path.Combine(songDir, song.VideoFile) : null;
-    if (videoPath == null || !File.Exists(videoPath))
-    {
-        var videoExtensions = new[] { ".mp4", ".mkv", ".webm", ".avi", ".wmv", ".mov" };
-        videoPath = Directory.GetFiles(songDir)
-            .FirstOrDefault(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
-    }
-    var hasVideo = videoPath != null && toolError == null && AudioConverter.HasVideoStream(videoPath);
-
-    // Echte Audio-Dauer ermitteln: Der Song soll bis zum AUDIO-Ende laufen
-    // (ausklingen), nicht bei der letzten Note abbrechen
-    if (audioPath != null && File.Exists(audioPath) && toolError == null)
-    {
-        song.AudioDurationSeconds = AudioConverter.GetDurationSeconds(audioPath);
-        if (song.AudioDurationSeconds > song.DurationSeconds)
-            Console.WriteLine($"Audio-Dauer: {song.AudioDurationSeconds:F1}s (Song laeuft bis zum Audio-Ende)");
-    }
-
-    // Preview-Start: #PREVIEWSTART oder 30% der Songlaenge
-    var previewStart = (double)song.PreviewStartSeconds;
-    if (previewStart <= 0 && song.AudioDurationSeconds > 0)
-        previewStart = song.AudioDurationSeconds * 0.3;
-
-    // ── 2. Chart + Lyric + DLC.xml generieren ──────────────────────
-    var input = new LipsSongPackageBuilder.SongInput
-    {
-        Title = song.Title,
-        Artist = song.Artist,
-        Genre = song.Genre.Length > 0 ? song.Genre : "Pop",
-        Year = song.Year.Length > 0 ? song.Year : "2024",
-        Language = song.Language.Length > 0 ? song.Language : "EN",
-        LengthSeconds = (int)song.EffectiveEndSeconds,
-        UltraStarSong = song,
-        PreviewStartSeconds = previewStart,
-        HasVideo = hasVideo,
-    };
-
-    var pkg = LipsSongPackageBuilder.Build(input);
-
-    Console.WriteLine("Generierte Dateien:");
-    foreach (var (name, data) in pkg.Files)
-        Console.WriteLine($"  {name} ({data.Length:N0} Bytes)");
-
-    // ── 3. Audio konvertieren (MP3 -> xWMA + Preview) ──────────────
-    if (audioPath != null && File.Exists(audioPath) && toolError == null)
-    {
-        Console.WriteLine();
-        Console.WriteLine($"Konvertiere Audio: {Path.GetFileName(audioPath)}");
-
-        var xwmaPath = Path.Combine(outputDir, $"{song.Title}.xWMA");
-        AudioConverter.ConvertToXwma(audioPath, xwmaPath);
-        pkg.Files[$"{song.Title}.xWMA"] = File.ReadAllBytes(xwmaPath);
-        Console.WriteLine($"  {song.Title}.xWMA ({pkg.Files[$"{song.Title}.xWMA"].Length:N0} Bytes)");
-
-        var prvPath = Path.Combine(outputDir, $"{song.Title}_prv.xWMA");
-        AudioConverter.CreatePreviewXwma(audioPath, prvPath, previewStart);
-        pkg.Files[$"{song.Title}_prv.xWMA"] = File.ReadAllBytes(prvPath);
-        Console.WriteLine($"  {song.Title}_prv.xWMA ({pkg.Files[$"{song.Title}_prv.xWMA"].Length:N0} Bytes, ab {previewStart:F0}s)");
-    }
-    else if (audioPath != null && File.Exists(audioPath) && toolError != null)
-    {
-        Console.WriteLine();
-        Console.WriteLine("WARNUNG: Audio wird NICHT konvertiert.");
-        Console.WriteLine(toolError);
-    }
-    else
-    {
-        Console.WriteLine();
-        Console.WriteLine($"WARNUNG: Audio-Datei nicht gefunden: {audioPath ?? "(kein #MP3-Tag)"}");
-    }
-
-    // ── 3b. Video konvertieren (MP4 -> WMV3 Haupt + Preview) ────────
-    // WMV3 (VC-1) via Windows MediaTranscoder - ffmpeg-WMV2 wird von
-    // Lips NICHT abgespielt (per Isolationstest verifiziert)!
-    if (hasVideo)
-    {
-        Console.WriteLine();
-        Console.WriteLine($"Konvertiere Video (WMV3): {Path.GetFileName(videoPath)}");
-
-        var wmvPath = Path.Combine(outputDir, $"{song.Title}.wmv");
-        VideoConverter.ConvertToMainWmv(videoPath!, wmvPath);
-        pkg.Files[$"{song.Title}.wmv"] = File.ReadAllBytes(wmvPath);
-        Console.WriteLine($"  {song.Title}.wmv ({pkg.Files[$"{song.Title}.wmv"].Length:N0} Bytes)");
-
-        // Preview-Video: GLEICHER Startpunkt wie Audio-Preview,
-        // damit Video, Audio und PreviewLyric zusammenpassen
-        var prvWmvPath = Path.Combine(outputDir, $"{song.Title}_prv.wmv");
-        VideoConverter.CreatePreviewWmv(videoPath!, prvWmvPath, previewStart);
-        pkg.Files[$"{song.Title}_prv.wmv"] = File.ReadAllBytes(prvWmvPath);
-        Console.WriteLine($"  {song.Title}_prv.wmv ({pkg.Files[$"{song.Title}_prv.wmv"].Length:N0} Bytes, ab {previewStart:F0}s)");
-    }
-
-    // ── 3. Cover konvertieren ───────────────────────────────────────
-    var coverPath = song.CoverFile.Length > 0 ? Path.Combine(songDir, song.CoverFile) : null;
-    if (coverPath != null && File.Exists(coverPath))
-    {
-        var jpgName = $"{song.Title}.jpg";
-        if (toolError == null)
-        {
-            var jpgPath = Path.Combine(outputDir, jpgName);
-            AudioConverter.ConvertCoverToJpg(coverPath, jpgPath);
-            pkg.Files[jpgName] = File.ReadAllBytes(jpgPath);
-        }
-        else if (coverPath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                 coverPath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
-        {
-            pkg.Files[jpgName] = File.ReadAllBytes(coverPath);
-        }
-
-        if (pkg.Files.ContainsKey(jpgName))
-            Console.WriteLine($"  {jpgName} ({pkg.Files[jpgName].Length:N0} Bytes)");
-    }
-    else
-    {
-        Console.WriteLine($"WARNUNG: Kein Cover gefunden ({song.CoverFile})");
-    }
-
-    // ── 4. Einzeldateien speichern (fuer Inspektion/Nachbearbeitung) ──
-    foreach (var (name, data) in pkg.Files)
-        File.WriteAllBytes(Path.Combine(outputDir, name), data);
-
-    // ── 5. STFS LIVE-Paket erstellen ────────────────────────────────
-    Console.WriteLine();
-    Console.WriteLine("Erstelle STFS LIVE-Paket...");
-    var stfsData = StfsWriter.CreatePackage(
-        pkg.Files,
-        $"\"{song.Title}\"",
-        $"{song.Artist} - {song.Title}",
-        titleId: 0x4D530888,
-        contentType: 0x00000002);
-
-    // Dateiname MUSS ContentID + "4D" sein (ContentID = SHA1 des Headers)
-    var requiredName = StfsWriter.GetRequiredFileName(stfsData);
-    var stfsPath = Path.Combine(outputDir, requiredName);
-    File.WriteAllBytes(stfsPath, stfsData);
-    Console.WriteLine($"  {requiredName} ({stfsData.Length:N0} Bytes)");
+    var result = UltraStarDlcPipeline.Run(txtPath, outputDir,
+        step => Console.WriteLine($"> {step}"));
 
     Console.WriteLine();
-    var hasAudio = pkg.Files.ContainsKey($"{song.Title}.xWMA");
-    if (hasAudio)
+    foreach (var w in result.Warnings)
+        Console.WriteLine($"WARNUNG: {w}");
+
+    Console.WriteLine();
+    if (result.HasAudio)
     {
-        Console.WriteLine("=== FERTIG - Komplett-Paket mit Audio ===");
-        Console.WriteLine($"1. Datei '{requiredName}' auf die Xbox kopieren nach:");
+        Console.WriteLine($"=== FERTIG - Komplett-Paket ({(result.HasVideo ? "mit" : "ohne")} Video) ===");
+        Console.WriteLine($"1. Datei '{result.StfsFileName}' ({result.StfsSize / 1024.0 / 1024.0:F1} MB) auf die Xbox kopieren nach:");
         Console.WriteLine("   Content/0000000000000000/4D530888/00000002/");
         Console.WriteLine("2. Dateiname exakt beibehalten (enthaelt die ContentID)!");
     }
     else
     {
         Console.WriteLine("=== UNVOLLSTAENDIG - Audio fehlt ===");
-        Console.WriteLine("Fehlende Dateien in den Ausgabe-Ordner legen und dann:");
-        Console.WriteLine($"  dotnet run -- create-test-dlc \"{outputDir}\" \"{outputDir}\"");
+        Console.WriteLine("Audio-Datei in den Song-Ordner legen und erneut ausfuehren.");
     }
 }
 

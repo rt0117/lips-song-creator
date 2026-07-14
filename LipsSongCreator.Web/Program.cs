@@ -8,6 +8,7 @@ builder.Services.AddRazorComponents()
 
 // Song-Service als Scoped (pro Session)
 builder.Services.AddScoped<SongService>();
+builder.Services.AddScoped<DlcBuildService>();
 
 var app = builder.Build();
 
