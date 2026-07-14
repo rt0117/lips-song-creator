@@ -95,6 +95,13 @@ public static class UltraStarDlcPipeline
         }
 
         // ── 4. Video konvertieren (WMV3 via Windows MediaTranscoder) ──
+        if (hasVideo && !VideoConverter.IsWmv3Available)
+        {
+            result.Warnings.Add(
+                "Video-Encoding auf dieser Plattform erzeugt WMV2 statt WMV3 - " +
+                "Lips spielt WMV2 NICHT ab. Fuer funktionierende Videos das DLC " +
+                "unter Windows bauen (oder ohne Video exportieren).");
+        }
         if (hasVideo)
         {
             Report("Konvertiere Musikvideo (WMV3, kann einige Minuten dauern)...");

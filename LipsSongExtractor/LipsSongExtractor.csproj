@@ -2,13 +2,17 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!-- Windows-TFM fuer WinRT MediaTranscoder (WMV3/VC-1-Encoding).
-         Der Lips-Videoplayer dekodiert nur WMV3, ffmpeg encodiert nur WMV2. -->
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Multi-Targeting: net9.0 fuer Linux/macOS, Windows-TFM fuer den
+         WinRT MediaTranscoder (WMV3/VC-1-Encoding). Der Lips-Videoplayer
+         dekodiert nur WMV3; unter Linux wird VC-1 via ffmpeg probiert. -->
+    <TargetFrameworks>net9.0-windows10.0.19041.0;net9.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net9.0-windows10.0.19041.0'">
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <DefineConstants>$(DefineConstants);WINDOWS_TRANSCODER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

@@ -9,27 +9,7 @@ namespace LipsSongExtractor;
 /// </summary>
 public static class YouTubeDownloader
 {
-    public static string? FindYtDlp()
-    {
-        var exeName = OperatingSystem.IsWindows() ? "yt-dlp.exe" : "yt-dlp";
-
-        var candidates = new[]
-        {
-            Path.Combine(Environment.CurrentDirectory, "tools", exeName),
-            Path.Combine(AppContext.BaseDirectory, "tools", exeName),
-        };
-        foreach (var c in candidates)
-            if (File.Exists(c)) return c;
-
-        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-        foreach (var dir in pathDirs)
-        {
-            var p = Path.Combine(dir.Trim(), exeName);
-            if (File.Exists(p)) return p;
-        }
-        return null;
-    }
+    public static string? FindYtDlp() => ToolLocator.Find("yt-dlp", "YTDLP_PATH");
 
     public static bool IsAvailable => FindYtDlp() != null;
 
