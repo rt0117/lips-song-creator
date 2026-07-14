@@ -82,3 +82,6 @@ tools/
 
 ## Vendor libraries (restored via libman/npm)
 **/wwwroot/lib/
+
+## Generated STFS packages anywhere in Ultrastar folders (40-hex + 4D name)
+Example/Ultrastar/**/*4D
