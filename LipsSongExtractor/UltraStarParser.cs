@@ -27,7 +27,10 @@ public static class UltraStarParser
 
         foreach (var rawLine in lines)
         {
-            var line = rawLine.Trim('\r', '\t', ' ');
+            // WICHTIG: Trailing Spaces NICHT global trimmen - bei Notenzeilen
+            // markiert ein Leerzeichen am Silbenende die Wortgrenze!
+            var lineRaw = rawLine.TrimEnd('\r');
+            var line = lineRaw.Trim('\t', ' ');
             if (string.IsNullOrEmpty(line)) continue;
 
             // Header-Tags
@@ -122,14 +125,32 @@ public static class UltraStarParser
 
             if (noteType == null) continue;
 
-            var noteParts = line[1..].Trim().Split(' ', 5, StringSplitOptions.RemoveEmptyEntries);
-            if (noteParts.Length < 4) continue;
+            // Noten-Text MIT Leerzeichen parsen: Nach den 3 Zahlen-Tokens
+            // beginnt der Text nach genau EINEM Trenn-Leerzeichen. Weitere
+            // fuehrende/trailing Leerzeichen gehoeren zum Text (Wortgrenzen!).
+            // Dafuer die Original-Zeile verwenden (lineRaw), nicht die getrimmte.
+            var noteBody = lineRaw.TrimStart('\t', ' ');
+            noteBody = noteBody[1..]; // Typ-Zeichen (: * F usw.) entfernen
 
-            if (!int.TryParse(noteParts[0], out var startBeat)) continue;
-            if (!int.TryParse(noteParts[1], out var length)) continue;
-            if (!int.TryParse(noteParts[2], out var pitch)) continue;
+            var tokens = new List<string>();
+            var pos = 0;
+            for (var t = 0; t < 3; t++)
+            {
+                while (pos < noteBody.Length && noteBody[pos] == ' ') pos++;
+                var tokenStart = pos;
+                while (pos < noteBody.Length && noteBody[pos] != ' ') pos++;
+                if (pos == tokenStart) break;
+                tokens.Add(noteBody[tokenStart..pos]);
+            }
 
-            var text = noteParts.Length >= 4 ? string.Join(" ", noteParts[3..]) : "";
+            if (tokens.Count < 3) continue;
+            if (!int.TryParse(tokens[0], out var startBeat)) continue;
+            if (!int.TryParse(tokens[1], out var length)) continue;
+            if (!int.TryParse(tokens[2], out var pitch)) continue;
+
+            // Genau ein Trenn-Leerzeichen ueberspringen, Rest ist der Text
+            if (pos < noteBody.Length && noteBody[pos] == ' ') pos++;
+            var text = pos < noteBody.Length ? noteBody[pos..] : "";
 
             song.Notes.Add(new UltraStarNote
             {

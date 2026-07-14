@@ -267,18 +267,26 @@ void CmdCreateTestDlc(string songDir, string outputPath)
     var title = chart?["m_strName"]?.ToString() ?? songName;
     Console.WriteLine($"Titel: {title}");
 
-    // DLC.xml erzeugen mit eindeutiger ID
-    Console.WriteLine("Erzeuge DLC.xml...");
-    var dlcInput = new LipsSongPackageBuilder.SongInput
+    // DLC.xml: vorhandene Datei aus dem Ordner respektieren, sonst generieren
+    if (files.ContainsKey("DLC.xml"))
     {
-        Title = title,
-        Artist = "Unknown Artist",
-        Genre = "Pop",
-        Year = "2024",
-        Language = "EN",
-        LengthSeconds = 200,
-    };
-    files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(dlcInput, songName);
+        Console.WriteLine("Verwende vorhandene DLC.xml aus dem Ordner.");
+    }
+    else
+    {
+        Console.WriteLine("Erzeuge DLC.xml...");
+        var dlcInput = new LipsSongPackageBuilder.SongInput
+        {
+            Title = title,
+            Artist = "Unknown Artist",
+            Genre = "Pop",
+            Year = "2024",
+            Language = "EN",
+            LengthSeconds = 200,
+            HasVideo = files.ContainsKey($"{songName}.wmv"),
+        };
+        files["DLC.xml"] = LipsSongPackageBuilder.BuildDlcXml(dlcInput, songName);
+    }
 
     // STFS LIVE-Paket erstellen
     Console.WriteLine("Erstelle STFS LIVE-Paket...");
@@ -378,25 +386,7 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
 
     Directory.CreateDirectory(outputDir);
 
-    // ── 1. Chart + Lyric + DLC.xml generieren ──────────────────────
-    var input = new LipsSongPackageBuilder.SongInput
-    {
-        Title = song.Title,
-        Artist = song.Artist,
-        Genre = song.Genre.Length > 0 ? song.Genre : "Pop",
-        Year = song.Year.Length > 0 ? song.Year : "2024",
-        Language = song.Language.Length > 0 ? song.Language : "EN",
-        LengthSeconds = (int)song.DurationSeconds,
-        UltraStarSong = song,
-    };
-
-    var pkg = LipsSongPackageBuilder.Build(input);
-
-    Console.WriteLine("Generierte Dateien:");
-    foreach (var (name, data) in pkg.Files)
-        Console.WriteLine($"  {name} ({data.Length:N0} Bytes)");
-
-    // ── 2. Audio konvertieren (MP3 -> xWMA + Preview) ──────────────
+    // ── 1. Quell-Dateien finden (Audio/Video) ───────────────────────
     var toolError = AudioConverter.CheckTools();
     var audioPath = song.AudioFile.Length > 0 ? Path.Combine(songDir, song.AudioFile) : null;
 
@@ -411,12 +401,47 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
             .FirstOrDefault();
         if (candidate != null)
         {
-            Console.WriteLine();
             Console.WriteLine($"HINWEIS: '{song.AudioFile}' nicht gefunden, verwende stattdessen: {Path.GetFileName(candidate)}");
             audioPath = candidate;
         }
     }
 
+    // Video-Quelle: #VIDEO-Tag oder Videodatei im Ordner (ggf. == audioPath)
+    var videoPath = song.VideoFile.Length > 0 ? Path.Combine(songDir, song.VideoFile) : null;
+    if (videoPath == null || !File.Exists(videoPath))
+    {
+        var videoExtensions = new[] { ".mp4", ".mkv", ".webm", ".avi", ".wmv", ".mov" };
+        videoPath = Directory.GetFiles(songDir)
+            .FirstOrDefault(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+    }
+    var hasVideo = videoPath != null && toolError == null && AudioConverter.HasVideoStream(videoPath);
+
+    // Preview-Start: #PREVIEWSTART oder 30% der Songlaenge
+    var previewStart = (double)song.PreviewStartSeconds;
+    if (previewStart <= 0 && audioPath != null && File.Exists(audioPath) && toolError == null)
+        previewStart = AudioConverter.GetDurationSeconds(audioPath) * 0.3;
+
+    // ── 2. Chart + Lyric + DLC.xml generieren ──────────────────────
+    var input = new LipsSongPackageBuilder.SongInput
+    {
+        Title = song.Title,
+        Artist = song.Artist,
+        Genre = song.Genre.Length > 0 ? song.Genre : "Pop",
+        Year = song.Year.Length > 0 ? song.Year : "2024",
+        Language = song.Language.Length > 0 ? song.Language : "EN",
+        LengthSeconds = (int)song.DurationSeconds,
+        UltraStarSong = song,
+        PreviewStartSeconds = previewStart,
+        HasVideo = hasVideo,
+    };
+
+    var pkg = LipsSongPackageBuilder.Build(input);
+
+    Console.WriteLine("Generierte Dateien:");
+    foreach (var (name, data) in pkg.Files)
+        Console.WriteLine($"  {name} ({data.Length:N0} Bytes)");
+
+    // ── 3. Audio konvertieren (MP3 -> xWMA + Preview) ──────────────
     if (audioPath != null && File.Exists(audioPath) && toolError == null)
     {
         Console.WriteLine();
@@ -427,10 +452,6 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
         pkg.Files[$"{song.Title}.xWMA"] = File.ReadAllBytes(xwmaPath);
         Console.WriteLine($"  {song.Title}.xWMA ({pkg.Files[$"{song.Title}.xWMA"].Length:N0} Bytes)");
 
-        // Preview: #PREVIEWSTART oder 30% der Songlaenge
-        var previewStart = song.PreviewStartSeconds > 0
-            ? song.PreviewStartSeconds
-            : AudioConverter.GetDurationSeconds(audioPath) * 0.3;
         var prvPath = Path.Combine(outputDir, $"{song.Title}_prv.xWMA");
         AudioConverter.CreatePreviewXwma(audioPath, prvPath, previewStart);
         pkg.Files[$"{song.Title}_prv.xWMA"] = File.ReadAllBytes(prvPath);
@@ -446,6 +467,27 @@ void CmdConvertUltraStar(string txtPath, string outputDir)
     {
         Console.WriteLine();
         Console.WriteLine($"WARNUNG: Audio-Datei nicht gefunden: {audioPath ?? "(kein #MP3-Tag)"}");
+    }
+
+    // ── 3b. Video konvertieren (MP4 -> WMV3 Haupt + Preview) ────────
+    // WMV3 (VC-1) via Windows MediaTranscoder - ffmpeg-WMV2 wird von
+    // Lips NICHT abgespielt (per Isolationstest verifiziert)!
+    if (hasVideo)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Konvertiere Video (WMV3): {Path.GetFileName(videoPath)}");
+
+        var wmvPath = Path.Combine(outputDir, $"{song.Title}.wmv");
+        VideoConverter.ConvertToMainWmv(videoPath!, wmvPath);
+        pkg.Files[$"{song.Title}.wmv"] = File.ReadAllBytes(wmvPath);
+        Console.WriteLine($"  {song.Title}.wmv ({pkg.Files[$"{song.Title}.wmv"].Length:N0} Bytes)");
+
+        // Preview-Video: GLEICHER Startpunkt wie Audio-Preview,
+        // damit Video, Audio und PreviewLyric zusammenpassen
+        var prvWmvPath = Path.Combine(outputDir, $"{song.Title}_prv.wmv");
+        VideoConverter.CreatePreviewWmv(videoPath!, prvWmvPath, previewStart);
+        pkg.Files[$"{song.Title}_prv.wmv"] = File.ReadAllBytes(prvWmvPath);
+        Console.WriteLine($"  {song.Title}_prv.wmv ({pkg.Files[$"{song.Title}_prv.wmv"].Length:N0} Bytes, ab {previewStart:F0}s)");
     }
 
     // ── 3. Cover konvertieren ───────────────────────────────────────

@@ -107,6 +107,31 @@ public static class AudioConverter
             $"-q:v 2 \"{outputPath}\"");
     }
 
+    // HINWEIS: Video-Konvertierung ist in VideoConverter.cs (WinRT
+    // MediaTranscoder) - ffmpeg kann kein WMV3/VC-1 encodieren und
+    // WMV2-Dateien werden von Lips nicht abgespielt!
+
+    /// <summary>
+    /// Prueft ob eine Datei eine Videospur enthaelt.
+    /// </summary>
+    public static bool HasVideoStream(string inputPath)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = RequireFfmpeg(),
+            Arguments = $"-i \"{inputPath}\" -hide_banner",
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi)!;
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        return stderr.Contains("Video:") && !stderr.Contains("Video: mjpeg") &&
+               !stderr.Contains("Video: png");
+    }
+
     /// <summary>
     /// Ermittelt die Laenge einer Audio-Datei in Sekunden (via ffmpeg).
     /// </summary>

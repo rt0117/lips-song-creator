@@ -133,9 +133,13 @@ public static class UltraStarToLipsConverter
         var pvPathPtr = builder.AddString(pvPath);
         var pvPathLen = Encoding.UTF8.GetByteCount(pvPath + "\0");
 
+        // Trigger bei 0, NICHT bei GAP: unsere xWMA enthaelt den Song ab 0:00.
+        // Die Noten liegen bei GAP + Beatzeit; wuerde das Audio erst bei GAP
+        // starten, waere alles um genau GAP versetzt. (Original triggert bei
+        // "PV Start", weil deren PV-Video einen Lead-in hat.)
         var audioMarker = builder.AddObject(CLS_AUDIO_MARKER, SZ_AUDIO_MARKER);
         audioMarker.WriteU32(4, 1);                     // m_uiReferenceCount
-        audioMarker.WriteF32(8, song.GapMs / 1000f);    // m_fTriggerTiming = PV Start
+        audioMarker.WriteF32(8, 0f);                    // m_fTriggerTiming = Audio-Start
         audioMarker.WriteF32(12, song.DurationSeconds); // m_fLength = Song-Dauer
         audioMarker.WriteI32(16, 0);                    // m_iTrackIndex
         audioMarker.WriteStringVector(20, pvPathPtr, pvPathLen); // m_strAudioName
@@ -362,11 +366,31 @@ public static class UltraStarToLipsConverter
     }
 
     /// <summary>
+    /// Berechnet den Oktaven-Shift (in Halbtoenen), um die Noten in den
+    /// von Lips dargestellten Bereich zu verschieben.
+    /// Original-Charts nutzen Oktave 4-7 mit Median ~5.5; UltraStar-Charts
+    /// notieren oft in Oktave 3-4 (relative Pitches). Lips clampt Noten
+    /// ausserhalb des Anzeigebereichs -> alles wirkt "einstimmig".
+    /// </summary>
+    internal static int ComputeOctaveShift(List<UltraStarNote> notes)
+    {
+        if (notes.Count == 0) return 0;
+        var sorted = notes.Select(n => n.MidiNote).OrderBy(m => m).ToList();
+        var median = sorted[sorted.Count / 2];
+        // Ziel: Median in Oktave 5 (MIDI 72-83, LipsOctave = MIDI/12 - 1)
+        const int targetMedian = 76; // ~E5, Mitte des Original-Bereichs
+        var shift = (int)Math.Round((targetMedian - median) / 12.0) * 12;
+        return shift;
+    }
+
+    /// <summary>
     /// Erzeugt Melody- + Lyric-Marker fuer eine Notenliste und verlinkt sie gegenseitig.
     /// </summary>
     private static (List<uint> melodyPtrs, List<uint> lyricPtrs) BuildMarkers(
         IxbBlobBuilder builder, UltraStarSong song, List<UltraStarNote> notes)
     {
+        var octaveShift = ComputeOctaveShift(notes);
+
         var melodyPtrs = new List<uint>();
         var melodyWriters = new List<ObjectWriter>();
         foreach (var note in notes)
@@ -380,9 +404,10 @@ public static class UltraStarToLipsConverter
             w.WriteF32(12, song.BeatsToSeconds(note.Length)); // m_fLength
             w.WriteI32(16, 0); // m_iTrackIndex
             w.WriteU32(20, 0); // m_bTriggered
-            // m_Tone (inline Tone struct at offset 24)
-            w.WriteF32(24, note.LipsFIdx); // fIdx
-            w.WriteI32(28, note.LipsOctave); // octave
+            // m_Tone: oktav-normalisiert in den Lips-Anzeigebereich
+            var midi = note.MidiNote + octaveShift;
+            w.WriteF32(24, midi % 12); // fIdx (Halbton in der Oktave)
+            w.WriteI32(28, midi / 12 - 1); // octave
             w.WriteU32(32, 0); // m_bTilt
             w.WriteU32(36, 0); // m_pLyricMarker (wird unten verlinkt)
 

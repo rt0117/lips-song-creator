@@ -31,9 +31,22 @@ public static class LipsSongPackageBuilder
         public string PreviewLyric { get; set; } = "";
 
         /// <summary>
+        /// Startzeit der Audio-Preview in Sekunden. Wird verwendet, um den
+        /// PreviewLyric passend zum Preview-Zeitfenster zu waehlen.
+        /// </summary>
+        public double PreviewStartSeconds { get; set; }
+
+        /// <summary>
         /// UltraStar-Song (wenn vorhanden) fuer Chart-Generierung.
         /// </summary>
         public UltraStarSong? UltraStarSong { get; set; }
+
+        /// <summary>
+        /// True wenn ein Musikvideo ({Title}.wmv + {Title}_prv.wmv) im Paket
+        /// liegt - dann wird die MusicVideos-Sektion in die DLC.xml
+        /// geschrieben (Video statt Default-Hintergrund).
+        /// </summary>
+        public bool HasVideo { get; set; }
     }
 
     /// <summary>
@@ -229,6 +242,10 @@ public static class LipsSongPackageBuilder
         sb.AppendLine($"      <VideoContentID>{contentId}</VideoContentID>");
 
         var preview = input.PreviewLyric;
+        // Bevorzugt: Lyrics aus dem Preview-Zeitfenster (passend zum Audio)
+        if (string.IsNullOrEmpty(preview) && input.UltraStarSong != null)
+            preview = BuildPreviewLyricFromWindow(input.UltraStarSong, input.PreviewStartSeconds);
+        // Fallback: Anfang des Lyric-Texts
         if (string.IsNullOrEmpty(preview) && !string.IsNullOrEmpty(input.LyricText))
         {
             preview = input.LyricText.Length > 80
@@ -240,11 +257,59 @@ public static class LipsSongPackageBuilder
         sb.AppendLine($"      <PreviewLyric>\"{EscapeXml(preview)}\"</PreviewLyric>");
         sb.AppendLine("    </MusicIndex>");
         sb.AppendLine("  </MusicIndices>");
-        sb.AppendLine("  <MusicVideos />");
+
+        if (input.HasVideo)
+        {
+            // MusicVideos-Sektion (wie Original-DLCs): sorgt dafuer, dass im
+            // Gameplay das Musikvideo statt des Default-Hintergrunds laeuft
+            sb.AppendLine("  <MusicVideos>");
+            sb.AppendLine("    <MusicVideo>");
+            sb.AppendLine($"      <Artist>{EscapeXml(input.Artist)}</Artist>");
+            sb.AppendLine($"      <Title>{EscapeXml(input.Title)}</Title>");
+            sb.AppendLine($"      <Genre>{EscapeXml(input.Genre)}</Genre>");
+            sb.AppendLine($"      <Year>{input.Year}</Year>");
+            sb.AppendLine($"      <Album>{EscapeXml(input.Album)}</Album>");
+            sb.AppendLine($"      <VideoUri>{safeTitle}.wmv</VideoUri>");
+            sb.AppendLine($"      <PreviewAudioUri>{safeTitle}_prv.xWMA</PreviewAudioUri>");
+            sb.AppendLine($"      <PreviewVideoUri>{safeTitle}_prv.wmv</PreviewVideoUri>");
+            sb.AppendLine($"      <PreviewIconUri>{safeTitle}_prv.nft</PreviewIconUri>");
+            sb.AppendLine($"      <VideoContentID>{contentId}</VideoContentID>");
+            sb.AppendLine($"      <ChartID>{contentId}_00</ChartID>");
+            sb.AppendLine("    </MusicVideo>");
+            sb.AppendLine("  </MusicVideos>");
+        }
+        else
+        {
+            sb.AppendLine("  <MusicVideos />");
+        }
+
         sb.AppendLine("  <LicenseBits ValidBits=\"3\">0x7</LicenseBits>");
         sb.AppendLine("</DLCContents>");
 
-        return Encoding.UTF8.GetBytes(sb.ToString());
+        // UTF-8 MIT BOM (wie Original-DLC.xml) - wichtig fuer Umlaute/Apostrophe
+        return Encoding.UTF8.GetPreamble()
+            .Concat(Encoding.UTF8.GetBytes(sb.ToString()))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Extrahiert die Lyrics aus dem Preview-Zeitfenster (Start + ~15s),
+    /// damit der angezeigte PreviewLyric zum Preview-Audio passt.
+    /// </summary>
+    private static string BuildPreviewLyricFromWindow(UltraStarSong song, double startSeconds,
+        double durationSeconds = 15)
+    {
+        var sb = new StringBuilder();
+        foreach (var note in song.SingableNotes.Where(n => n.Player == 1))
+        {
+            var t = song.BeatToSeconds(note.StartBeat);
+            if (t < startSeconds || t > startSeconds + durationSeconds) continue;
+            sb.Append(note.Text.Replace("~", ""));
+        }
+
+        var text = sb.ToString().Trim();
+        if (text.Length > 120) text = text[..120].TrimEnd() + "...";
+        return text;
     }
 
     /// <summary>
