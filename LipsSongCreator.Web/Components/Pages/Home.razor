@@ -335,8 +335,10 @@ else
 
             var bytes = Song.ExportAsStfs();
             var base64 = Convert.ToBase64String(bytes);
-            var title = _meta?.Name ?? "Song";
-            await JS.InvokeVoidAsync("fileDownload.save", $"{title}_LipsDLC", base64);
+            // Dateiname MUSS ContentID + "4D" sein - Lips/XContent validiert
+            // dass der Dateiname dem Header-Hash entspricht
+            var fileName = LipsSongExtractor.StfsWriter.GetRequiredFileName(bytes);
+            await JS.InvokeVoidAsync("fileDownload.save", fileName, base64);
         }
         catch (Exception ex)
         {

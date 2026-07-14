@@ -209,11 +209,18 @@ void CmdStfsRepack(string templatePath, string songDir, string outputPath)
     Console.WriteLine("Verpacke mit Original-Header...");
 
     var result = StfsWriter.CreateFromTemplate(templateBytes, files);
-    File.WriteAllBytes(outputPath, result);
-    Console.WriteLine($"Geschrieben: {outputPath} ({result.Length:N0} Bytes)");
+
+    // Dateiname MUSS ContentID + "4D" sein (ContentID = SHA1 des Headers,
+    // aendert sich also bei jeder Header-Modifikation)
+    var requiredName = StfsWriter.GetRequiredFileName(result);
+    var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".";
+    var finalPath = Path.Combine(outputDir, requiredName);
+
+    File.WriteAllBytes(finalPath, result);
+    Console.WriteLine($"Geschrieben: {finalPath} ({result.Length:N0} Bytes)");
 
     // Verifizieren
-    using var reader = new StfsReader(outputPath);
+    using var reader = new StfsReader(finalPath);
     Console.WriteLine($"Verifikation: {reader.Files.Count} Dateien, Magic={reader.Magic}");
     Console.WriteLine();
     Console.WriteLine("Auf die Xbox kopieren nach:");

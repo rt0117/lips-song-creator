@@ -190,6 +190,12 @@ public static class StfsWriter
         var topHash = SHA1.HashData(blob.AsSpan(topOffset, BlockSize));
         Array.Copy(topHash, 0, blob, 0x381, 20);
 
+        // ContentID (0x32C) = SHA1 des Metadata-Headers (0x344 bis Header-Ende).
+        // Die XContent-API validiert diesen Hash auch auf RGH/JTAG-Konsolen -
+        // ein falscher Wert fuehrt dazu, dass das Paket ignoriert wird.
+        // MUSS als letztes berechnet werden (nach TopHash, DisplayName etc.).
+        WriteContentIdHash(blob, firstBlock);
+
         // Trim to actual size
         var lastDataBlock = ComputeDataBlockNumber(totalBlocks - 1);
         var finalSize = firstBlock + (lastDataBlock + 1) * BlockSize;
@@ -323,6 +329,9 @@ public static class StfsWriter
         var topHash = SHA1.HashData(blob.AsSpan(topOffset, BlockSize));
         Array.Copy(topHash, 0, blob, 0x381, 20);
 
+        // ContentID = SHA1 des Metadata-Headers (siehe WriteContentIdHash)
+        WriteContentIdHash(blob, FirstBlockOffset);
+
         var lastDataBlock = ComputeDataBlockNumber(totalBlocks - 1);
         var finalSize = FirstBlockOffset + (lastDataBlock + 1) * BlockSize;
         return blob.AsSpan(0, Math.Min(finalSize, blob.Length)).ToArray();
@@ -344,13 +353,9 @@ public static class StfsWriter
         WriteU32BE(blob, 0x234, 1);
         WriteU32BE(blob, 0x238, 0);
 
-        // ContentID at 0x32C (20 Bytes) - MUSS zum Dateinamen passen!
-        // Dateiname = ContentID(40 hex) + "4D"
-        // Generiere eine zufaellige ContentID
-        var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
-        var contentIdBytes = new byte[20];
-        rng.GetBytes(contentIdBytes);
-        Array.Copy(contentIdBytes, 0, blob, 0x32C, 20);
+        // ContentID at 0x32C (20 Bytes) - wird NACH dem kompletten Aufbau
+        // als SHA1 des Metadata-Headers berechnet (siehe WriteContentIdHash).
+        // Der Dateiname ist dann ContentID(40 hex) + "4D".
 
         // Header Size (0xAD0E = mit Thumbnails, wie Original)
         WriteU32BE(blob, 0x340, (uint)HeaderSize);
@@ -550,6 +555,25 @@ public static class StfsWriter
             if (name.EndsWith(".XML")) return 8; // GES*.xml
             return 9;
         }).ThenBy(f => f.Key).ToList();
+    }
+
+    /// <summary>
+    /// Berechnet die ContentID (Header-Hash) und schreibt sie an Offset 0x32C.
+    ///
+    /// KRITISCH: Die ContentID ist KEIN zufaelliger Wert, sondern der
+    /// SHA1-Hash des Metadata-Headers von 0x344 bis zum Block-alignten
+    /// Header-Ende (z.B. 0xB000 bei HeaderSize 0xAD0E).
+    /// Verifiziert gegen Original-DLCs:
+    ///   SHA1(header[0x344..0xB000]) == ContentID == Dateiname[0..39]
+    /// Die Xbox XContent-API validiert diesen Hash beim Content-Scan -
+    /// auch auf RGH/JTAG. Ein Paket mit falschem Header-Hash wird ignoriert.
+    /// Muss als LETZTES aufgerufen werden, nachdem alle Header-Felder
+    /// (TopHash, ContentSize, DisplayName, ...) final sind.
+    /// </summary>
+    private static void WriteContentIdHash(byte[] blob, int firstBlock)
+    {
+        var hash = SHA1.HashData(blob.AsSpan(0x344, firstBlock - 0x344));
+        Array.Copy(hash, 0, blob, 0x32C, 20);
     }
 
     /// <summary>

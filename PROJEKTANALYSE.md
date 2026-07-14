@@ -167,7 +167,38 @@ Bei einem fruehen Test stieg die Song-Anzahl von 550 auf 552 (also +2), aber Cal
 
 **Test B zeigt:** Selbst eine minimale Aenderung am STFS-Header macht ein DLC unbrauchbar. Das deutet auf **Hash-/Signatur-Validierung** hin - auch auf RGH/JTAG Konsolen.
 
-### Moegliche Ursachen (noch nicht geprueft)
+### DURCHBRUCH: ContentID ist der SHA1-Hash des Headers
+
+Analyse der Original-DLCs (verifiziert an 11 von 11 DLC-Paketen aus der 330er-Sammlung):
+
+```
+ContentID (Offset 0x32C, 20 Bytes) == SHA1(header[0x344 .. 0xB000])
+Dateiname == ContentID als Hex + "4D"
+```
+
+Die ContentID ist also **kein zufaelliger Wert**, sondern der SHA1-Hash des
+kompletten Metadata-Headers (ab ContentType 0x344 bis zum Block-alignten
+Header-Ende 0xB000). Die XContent-API der Xbox validiert diesen Hash beim
+Content-Scan - **auch auf RGH/JTAG-Konsolen**.
+
+Das erklaert ALLE bisherigen Testergebnisse:
+
+- **Test A** (Kopie unter anderem Namen): Dateiname passt nicht mehr zum
+  Header-Hash -> nicht erkannt
+- **Test B** (1 Byte im DisplayName geaendert): Header-Hash aendert sich,
+  ContentID im Header und Dateiname passen nicht mehr -> nicht erkannt
+- **Test C** (unser DLC): ContentID war zufaellig generiert statt
+  SHA1(Header) -> nicht erkannt
+
+**Fix implementiert:** `StfsWriter` berechnet die ContentID jetzt als
+letzten Schritt nach dem finalen Header-Aufbau (`WriteContentIdHash`).
+Der Dateiname wird daraus abgeleitet. Gilt fuer `CreatePackage` und
+`CreateFromTemplate`. Regression-Tests pruefen die Formel gegen
+Original-DLCs.
+
+**Status:** Auf der Xbox noch nicht verifiziert (naechster Hardware-Test).
+
+### Moegliche Ursachen (noch nicht geprueft) - VERALTET, siehe Durchbruch oben
 
 1. **STFS-Signatur wird doch geprueft:** Obwohl RGH/JTAG die RSA-Signatur beim Booten nicht prueft, koennte Lips (das Spiel selbst) die Signatur validieren. Die Original-DLCs haben eine gueltige Microsoft-Signatur im Header (Offset 0x000C-0x0103). Unsere Pakete haben dort Nullen.
 
@@ -203,7 +234,7 @@ Byte-fuer-Byte Vergleich des STFS-Headers (alle Felder bei Offset < 0x1720):
 | 0x0004 | CertType | variiert (0x0318, 0xC684, 0xA64B) | 0xC684 | Variabel |
 | 0x000C | RSA-Signatur | 256 Bytes Signaturdaten | 256 Bytes Nullen | **VERDAECHTIG** |
 | 0x022C | Licensing[0] | `FFFFFFFFFFFFFFFF00000001` | identisch | OK |
-| 0x032C | ContentID | einzigartig pro DLC | zufaellig generiert | OK |
+| 0x032C | ContentID | SHA1(header[0x344..0xB000]) | jetzt identisch berechnet | **GEFIXT** |
 | 0x0340 | HeaderSize | `0x0000AD0E` | identisch | OK |
 | 0x0344 | ContentType | `0x00000002` | identisch | OK |
 | 0x0360 | TitleID | `0x4D530888` | identisch | OK |
