@@ -17,6 +17,30 @@ public class DlcBuildService
 
     public bool IsRunning { get; private set; }
 
+    /// <summary>
+    /// Vorbereitetes Projekt aus dem Wizard: Dateien liegen bereit,
+    /// das DLC wird erst beim Export aus dem Editor gebaut.
+    /// </summary>
+    public Dictionary<string, byte[]>? PendingFiles { get; private set; }
+
+    public bool HasPendingProject => PendingFiles != null;
+
+    /// <summary>Projekt aus dem Wizard uebernehmen (ohne zu bauen).</summary>
+    public void StageProject(Dictionary<string, byte[]> files)
+    {
+        PendingFiles = files;
+    }
+
+    /// <summary>Baut das DLC aus dem vorbereiteten Wizard-Projekt.</summary>
+    public async Task<UltraStarDlcPipeline.Result> BuildPendingAsync()
+    {
+        if (PendingFiles == null)
+            throw new InvalidOperationException("Kein vorbereitetes Projekt vorhanden.");
+        return await BuildAsync(PendingFiles);
+    }
+
+    public void ClearPendingProject() => PendingFiles = null;
+
     /// <summary>Tool-Verfuegbarkeit pruefen (ffmpeg/xWMAEncode).</summary>
     public string? CheckTools() => AudioConverter.CheckTools();
 

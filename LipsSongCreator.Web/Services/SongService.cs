@@ -27,6 +27,23 @@ public class SongService
     public string? FileName => _fileName;
 
     /// <summary>
+    /// Entlaedt den aktuellen Song komplett (zurueck zur Landing Page).
+    /// </summary>
+    public void Unload()
+    {
+        _headerBytes = null;
+        _blobBytes = null;
+        _trailerBytes = null;
+        _header = null;
+        _deserializer = null;
+        _serializer = null;
+        _fileName = null;
+        _ultraStarSong = null;
+        _ultraStarMeta = null;
+        _ultraStarSequences = null;
+    }
+
+    /// <summary>
     /// Laedt eine .X360-Datei aus einem Byte-Array.
     /// </summary>
     public void Load(string fileName, byte[] fileBytes)

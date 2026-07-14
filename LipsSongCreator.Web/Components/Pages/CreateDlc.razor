@@ -118,6 +118,7 @@
         else if (_step == 4)
         {
             <h5>Zusammenfassung</h5>
+            <p class="wiz-desc">Alles beisammen? Im naechsten Schritt oeffnet sich der Editor zur Kontrolle der Noten und Lyrics. Das DLC wird erst dort ueber "Export DLC" gebaut.</p>
             <div class="wiz-summary">
                 <div><span class="lbl">Titel:</span> <strong>@_title</strong></div>
                 <div><span class="lbl">Artist:</span> <strong>@_artist</strong></div>
@@ -130,14 +131,6 @@
             @if (_toolWarning != null)
             {
                 <div style="color:var(--accent-secondary);font-size:0.8rem;white-space:pre-line;margin:0.5rem 0;">@_toolWarning</div>
-            }
-
-            @if (DlcBuilder.IsRunning)
-            {
-                <div style="display:flex;align-items:center;gap:0.5rem;margin:1rem 0;">
-                    <div class="spinner"></div>
-                    <span style="color:var(--text-secondary)">@(DlcBuilder.CurrentStep ?? "Baue DLC...")</span>
-                </div>
             }
         }
 
@@ -160,9 +153,9 @@
         }
         else
         {
-            <button class="btn-accent" @onclick="BuildAndOpenEditor"
-                    disabled="@(DlcBuilder.IsRunning || _txtContent == null)">
-                DLC erstellen und im Editor oeffnen
+            <button class="btn-accent" @onclick="OpenInEditor"
+                    disabled="@(_txtContent == null)">
+                Im Editor kontrollieren
             </button>
         }
     </div>
@@ -316,42 +309,30 @@
         if (step <= _step) { _step = step; _error = null; }
     }
 
-    private async Task BuildAndOpenEditor()
+    private void OpenInEditor()
     {
         if (_txtContent == null) return;
         _error = null;
 
         try
         {
-            // Dateien zusammenstellen
+            // Metadaten in die .txt einfliessen lassen: Header-Felder ueberschreiben
+            var txt = PatchUltraStarHeader(_txtContent, _title, _artist, _genre, _year, _language);
+
+            // Dateien fuer den spaeteren Export vormerken (NICHT sofort bauen)
             var files = new Dictionary<string, byte[]>
             {
-                [_txtFileName ?? "song.txt"] = System.Text.Encoding.UTF8.GetBytes(_txtContent)
+                [_txtFileName ?? "song.txt"] = System.Text.Encoding.UTF8.GetBytes(txt)
             };
-
             if (_mediaBytes != null)
                 files[_mediaFileName ?? "audio.mp4"] = _mediaBytes;
-
             if (_coverBytes != null)
                 files[_coverFileName?.Replace(" (YouTube)", "") ?? "cover.jpg"] = _coverBytes;
 
-            // Metadaten in die .txt einfliessen lassen: Header-Felder ueberschreiben
-            var txtKey = files.Keys.First(k => k.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
-            var txt = System.Text.Encoding.UTF8.GetString(files[txtKey]);
-            txt = PatchUltraStarHeader(txt, _title, _artist, _genre, _year, _language);
-            files[txtKey] = System.Text.Encoding.UTF8.GetBytes(txt);
+            DlcBuilder.StageProject(files);
 
-            var result = await DlcBuilder.BuildAsync(files);
-
-            // Song im Editor laden (UltraStar-Modus)
+            // Song im Editor laden (UltraStar-Modus) und dorthin navigieren
             Song.LoadUltraStar(_txtFileName ?? "song.txt", txt);
-
-            // STFS-Paket als Download anbieten
-            var stfsBytes = DlcBuilder.ReadAndCleanup(result);
-            var base64 = Convert.ToBase64String(stfsBytes);
-            await JS.InvokeVoidAsync("fileDownload.save", result.StfsFileName, base64);
-
-            // Zum Editor navigieren
             Nav.NavigateTo("/editor");
         }
         catch (Exception ex)

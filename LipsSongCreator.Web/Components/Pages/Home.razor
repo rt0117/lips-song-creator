@@ -2,6 +2,7 @@
 @page "/editor"
 @using LipsSongCreator.Web.Services
 @inject SongService Song
+@inject DlcBuildService DlcBuilder
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @rendermode InteractiveServer
@@ -53,7 +54,9 @@ else
         <button class="btn-t" @onclick="CloseSong">Datei schliessen</button>
         @if (Song.IsUltraStarMode)
         {
-            <button class="btn-accent" @onclick="ExportStfs">Export DLC</button>
+            <button class="btn-accent" @onclick="ExportStfs" disabled="@DlcBuilder.IsRunning">
+                @(DlcBuilder.IsRunning ? (DlcBuilder.CurrentStep ?? "Baue DLC...") : "Export DLC")
+            </button>
             <button class="btn-t" @onclick="ExportSong">Export ZIP</button>
         }
         else
@@ -328,6 +331,22 @@ else
         await JS.InvokeVoidAsync("pianoRoll.setZoom", _zoom);
     }
 
+    protected override void OnInitialized()
+    {
+        DlcBuilder.ProgressChanged += () => InvokeAsync(StateHasChanged);
+
+        // Song wurde ggf. schon vom Wizard geladen (Navigation zu /editor):
+        // Metadaten und Sequenzen aus dem Service uebernehmen
+        if (Song.IsLoaded && _meta == null)
+        {
+            _meta = Song.GetMetadata();
+            _sequences = Song.GetSequences();
+            var lyricSeq = _sequences.FirstOrDefault(s => s.Name == "Lyric");
+            _lyricMarkers = lyricSeq?.Markers ?? [];
+            SelectSequenceData("Melody");
+        }
+    }
+
     private void CloseSong()
     {
         _meta = null;
@@ -335,7 +354,10 @@ else
         _activeMarkers = [];
         _lyricMarkers = [];
         _canvasInitialized = false;
+        DlcBuilder.ClearPendingProject();
+        Song.Unload();
         _ = JS.InvokeVoidAsync("pianoRoll.destroy");
+        Nav.NavigateTo("/");
     }
 
     private async Task ExportStfs()
@@ -344,11 +366,27 @@ else
         {
             if (!Song.IsLoaded || !Song.IsUltraStarMode) return;
 
-            var bytes = Song.ExportAsStfs();
+            byte[] bytes;
+            string fileName;
+
+            if (DlcBuilder.HasPendingProject)
+            {
+                // Wizard-Projekt: Komplett-Pipeline mit Audio/Video/Cover
+                var result = await DlcBuilder.BuildPendingAsync();
+                bytes = DlcBuilder.ReadAndCleanup(result);
+                fileName = result.StfsFileName;
+            }
+            else
+            {
+                // Nur-Chart-Export (ohne Medien) - z.B. wenn eine .txt direkt
+                // im Editor geoeffnet wurde
+                bytes = Song.ExportAsStfs();
+                // Dateiname MUSS ContentID + "4D" sein - Lips/XContent validiert
+                // dass der Dateiname dem Header-Hash entspricht
+                fileName = LipsSongExtractor.StfsWriter.GetRequiredFileName(bytes);
+            }
+
             var base64 = Convert.ToBase64String(bytes);
-            // Dateiname MUSS ContentID + "4D" sein - Lips/XContent validiert
-            // dass der Dateiname dem Header-Hash entspricht
-            var fileName = LipsSongExtractor.StfsWriter.GetRequiredFileName(bytes);
             await JS.InvokeVoidAsync("fileDownload.save", fileName, base64);
         }
         catch (Exception ex)
